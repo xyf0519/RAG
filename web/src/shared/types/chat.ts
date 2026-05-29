@@ -1,0 +1,82 @@
+export type ErrorCode =
+  | "BACKEND_UNAVAILABLE"
+  | "LLM_TIMEOUT"
+  | "NO_REFERENCE"
+  | "OUT_OF_SCOPE";
+
+export type Source = {
+  index: number;
+  doc_id: string;
+  chunk_id: string;
+  title: string;
+  score: number;
+  text: string;
+};
+
+export type Boundary = {
+  is_in_scope: boolean;
+  probability: number;
+  reason: string;
+};
+
+export type Timings = {
+  llm_elapsed_seconds: number;
+  total_elapsed_seconds: number;
+};
+
+export type ChatRequest = {
+  query: string;
+  session_id?: string;
+};
+
+export type ChatFinalPayload = {
+  answer: string;
+  session_id: string;
+  rewritten_query: string;
+  boundary: Boundary;
+  sources: Source[];
+  used_llm: boolean;
+  timings: Timings;
+  error_code?: ErrorCode | null;
+  error?: string | null;
+};
+
+export type ChatStatusPayload = {
+  stage: string;
+  message: string;
+  ts?: number;
+};
+
+export type ChatDeltaPayload = {
+  text: string;
+};
+
+export type ChatErrorPayload = {
+  code: ErrorCode;
+  message: string;
+  retryable: boolean;
+  session_id?: string;
+};
+
+export type ChatStreamEvent =
+  | { type: "status"; payload: ChatStatusPayload }
+  | { type: "delta"; payload: ChatDeltaPayload }
+  | { type: "final"; payload: ChatFinalPayload }
+  | { type: "error"; payload: ChatErrorPayload };
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+  sources?: Source[];
+  boundary?: Boundary;
+  rewrittenQuery?: string;
+  timings?: Timings;
+  errorCode?: ErrorCode | null;
+};
+
+export type BackendHealth = {
+  ok: boolean;
+  app: string;
+};
