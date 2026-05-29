@@ -1,15 +1,16 @@
 # xyfRAG 使用手册
 
-这份文档面向日常开发、演示和后续推送维护。README 负责快速展示项目，USAGE 负责把操作步骤写清楚。
+这份文档面向日常开发、演示和维护。当前主交互入口是 `web/` 下的 Next.js 工作台，`frontend.py` 仅作为 Gradio 调试入口保留。
 
 ## 1. 环境准备
 
-推荐使用 Python 3.9 或更高版本。
+后端需要 Python 3.9+，前端建议 Node 24 LTS。BGE 本地模型需要额外安装 `requirements-local-models.txt`。
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-local-models.txt
 cp .env.example .env
 ```
 
@@ -17,90 +18,73 @@ cp .env.example .env
 
 ```bash
 OPENAI_API_KEY=你的 API Key
-OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
-如果没有 API Key，默认配置 `llm.allow_mock_when_no_key: true` 会启用本地抽取式回答，仍然可以演示完整 RAG 链路。
+没有 API Key 时，默认 `llm.allow_mock_when_no_key: true` 会启用本地抽取式回答。
 
-## 2. 配置入口
-
-主要配置集中在 `config/settings.yaml`：
+BGE embedding/reranker 不走 OpenAI API，不需要在 `.env` 填 BGE API Key。当前默认配置从本地已下载模型加载：
 
 ```yaml
-boundary_classifier:
-  enabled: true
-  threshold: 0.55
-
 retrieval:
-  bm25_top_k: 8
-  embedding_top_k: 8
-  rerank_top_k: 3
-  use_local_models: false
-
-llm:
-  model: gpt-4.1-mini
-  allow_mock_when_no_key: true
+  embedding_backend: bge
+  embedding_model: models/huggingface/bge-small-zh-v1.5
+  reranker_backend: lexical
+  reranker_model: ""
+  use_local_models: true
+  allow_model_fallback: true
 ```
 
-常用调整：
+`bge-small-zh-v1.5` 适合 CPU 快速演示。如果学校网络不能直连 Hugging Face，可以选择其一：
 
-| 场景 | 修改项 |
-| --- | --- |
-| 边界分类过严 | 降低 `boundary_classifier.threshold` |
-| 召回结果太少 | 提高 `bm25_top_k` 或 `embedding_top_k` |
-| 希望给 LLM 更多资料 | 提高 `rerank_top_k` |
-| 启用本地语义模型 | 设置 `retrieval.use_local_models: true` |
-| 强制必须使用真实 LLM | 设置 `llm.allow_mock_when_no_key: false` |
+```bash
+HF_ENDPOINT=https://hf-mirror.com
+HF_TOKEN=你的 Hugging Face Token
+```
 
-## 3. 准备知识库
+或者提前下载模型，然后把 `config/settings.yaml` 改成本地路径：
 
-把校园资料库文档放入：
+```yaml
+retrieval:
+  embedding_model: /absolute/path/to/bge-small-zh-v1.5
+```
+
+## 2. 准备索引和边界分类器
+
+知识库文档放在：
 
 ```text
 data/raw/
 ```
 
-当前支持：
-
-```text
-.md
-.txt
-```
-
-示例：
-
-```text
-data/raw/campus_guide.md
-```
-
-更新文档后必须重建索引：
+当前支持 `.md` 和 `.txt`。更新知识库后重建索引：
 
 ```bash
 PYTHONPATH=src python scripts/build_index.py
 ```
 
-## 4. 训练边界分类器
+边界分类器训练数据放在：
 
-训练脚本：
+```text
+data/boundary/train.jsonl
+```
+
+每行格式：
+
+```json
+{"text":"补考申请什么时候提交","label":1}
+{"text":"给我讲个笑话","label":0}
+```
+
+训练：
 
 ```bash
 PYTHONPATH=src python models/train_classifier.py
 ```
 
-产物位置：
+如果 `data/boundary/train.jsonl` 不存在，脚本会 fallback 到内置 mock 数据。
 
-```text
-models/boundary_classifier/classifier.joblib
-```
-
-当前脚本内置 mock 数据用于跑通流程。真实项目中建议把样本扩展为：
-
-| Label | 含义 | 示例 |
-| --- | --- | --- |
-| 1 | 校园资料库相关 | 补考申请时间、校园卡挂失、图书馆借阅规则 |
-| 0 | 闲聊或超纲 | 天气、电影推荐、写诗、股票预测 |
-
-## 5. 启动后端
+## 3. 启动后端
 
 ```bash
 PYTHONPATH=src uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -112,30 +96,37 @@ PYTHONPATH=src uvicorn app.main:app --host 127.0.0.1 --port 8000
 curl http://127.0.0.1:8000/health
 ```
 
-预期：
-
-```json
-{"ok":true,"app":"xyfRAG"}
-```
-
-## 6. 启动前端
-
-另开一个终端：
+## 4. 启动 Next.js 工作台
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=src python frontend.py
+cd web
+npm install
+cp .env.example .env.local
+npm run dev
 ```
 
 访问：
 
 ```text
-http://127.0.0.1:7860
+http://127.0.0.1:3000
 ```
 
-## 7. API 调用
+前端通过 BFF 路由访问后端：
 
-校园资料库问题：
+| 路由 | 说明 |
+| --- | --- |
+| `GET /api/health` | Next.js 检查 FastAPI 健康状态 |
+| `POST /api/chat` | Next.js 代理 FastAPI 流式问答 |
+
+`web/.env.local` 中可调整：
+
+```bash
+RAG_BACKEND_URL=http://127.0.0.1:8000
+```
+
+## 5. API 调用
+
+兼容 JSON 接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
@@ -143,78 +134,86 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"query":"挂科后什么时候申请补考？","session_id":"demo"}'
 ```
 
-超纲问题：
+流式接口：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat \
+curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
   -H 'Content-Type: application/json' \
-  -d '{"query":"给我讲个笑话","session_id":"demo"}'
+  -d '{"query":"挂科后什么时候申请补考？","session_id":"demo"}'
 ```
 
-重点看返回中的：
+NDJSON 事件类型：
 
-```json
-{
-  "boundary": {
-    "is_in_scope": false
-  },
-  "used_llm": false
-}
-```
-
-这表示边界分类器已经熔断，未调用大模型。
-
-## 8. 评测
-
-```bash
-PYTHONPATH=src python scripts/evaluate.py
-```
-
-评测脚本会对比：
-
-| 模式 | 说明 |
+| type | payload |
 | --- | --- |
-| RAG | 边界分类、检索、重排、引用后回答 |
-| Plain LLM | 不带知识库的原生大模型回答 |
+| `status` | `stage`、`message`、`ts` |
+| `delta` | `text` |
+| `final` | `answer`、`sources`、`boundary`、`rewritten_query`、`timings` |
+| `error` | `code`、`message`、`retryable` |
 
-涉及真实 LLM 的部分需要配置 `OPENAI_API_KEY`。
-
-## 9. GitHub 推送流程
-
-当前远程仓库：
-
-```bash
-git remote -v
-```
-
-预期：
+稳定错误码：
 
 ```text
-origin  https://github.com/xyf0519/RAG.git (fetch)
-origin  https://github.com/xyf0519/RAG.git (push)
+BACKEND_UNAVAILABLE
+LLM_TIMEOUT
+NO_REFERENCE
+OUT_OF_SCOPE
 ```
 
-后续日常推送：
+## 6. 测试
+
+后端：
 
 ```bash
-git status
-git add .
-git commit -m "docs: update usage guide"
-git push origin main
+PYTHONPATH=src pytest
 ```
 
-如果远程有更新，先拉取：
+前端：
 
 ```bash
-git pull --rebase origin main
-git push origin main
+cd web
+npm run lint
+npm run typecheck
+npm test
+npm run e2e
 ```
 
-## 10. 常见问题
+E2E 使用 mocked BFF 响应验证桌面和移动端工作台基础体验。
 
-### 没有 API Key 能不能跑？
+## 7. Docker 演示
 
-可以。默认 `llm.allow_mock_when_no_key: true`，会使用本地抽取式回答。
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+访问：
+
+```text
+http://127.0.0.1:3000
+```
+
+## 8. 可选增强
+
+默认已经配置为本地 `bge-small-zh-v1.5` embedding + 轻量词面 reranker，适合本机 CPU 演示。若机器没有安装本地模型依赖，系统会自动降级到 hashing embedding 和词面 reranker，保证演示不崩。
+
+如果要升级到完整 BGE-M3 或 BGE reranker，把模型下载到 `models/huggingface/` 后修改：
+
+```yaml
+retrieval:
+  embedding_backend: bge
+  embedding_model: models/huggingface/bge-m3
+  reranker_backend: bge
+  reranker_model: models/huggingface/bge-reranker-v2-m3
+```
+
+如果显存/内存不足，可在 `config/settings.yaml` 临时切成轻量模式：
+
+```yaml
+retrieval:
+  use_local_models: false
+```
+
+## 9. 常见问题
 
 ### 为什么问天气会直接拒答？
 
@@ -228,21 +227,6 @@ git push origin main
 PYTHONPATH=src python scripts/build_index.py
 ```
 
-### 如何启用更强的向量模型和重排模型？
+### Next.js 显示后端离线怎么办？
 
-安装可选依赖：
-
-```bash
-pip install -r requirements-local-models.txt
-```
-
-修改配置：
-
-```yaml
-retrieval:
-  use_local_models: true
-```
-
-### 运行产物会不会被提交？
-
-`.gitignore` 已忽略 `.venv/`、日志、索引和训练产物。源码、配置、示例原始知识库和文档会进入版本管理。
+确认 FastAPI 正在运行，并检查 `web/.env.local` 中的 `RAG_BACKEND_URL`。
