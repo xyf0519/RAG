@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xyfrag"
+version = "0.1.0"
+description = "Campus RAG assistant with boundary filtering, hybrid retrieval, citations, and session memory."
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]
