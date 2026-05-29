@@ -12,6 +12,7 @@ models/boundary_classifier/
 models/huggingface/
 
 web/.next/
+web/.env.local
 web/node_modules/
 web/playwright-report/
 web/test-results/
