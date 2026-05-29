@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">xyfRAG</h1>
+  <h1 align="center">campus RAG</h1>
   <p align="center">面向校园资料库的可控 RAG 问答工程</p>
 </p>
 
