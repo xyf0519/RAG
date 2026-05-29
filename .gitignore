@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+
+logs/*.out
+logs/*.log
+
+data/index/
+models/boundary_classifier/
