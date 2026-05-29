@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from xyfrag.config import RetrievalConfig
+from xyfrag.config import PROJECT_ROOT, RetrievalConfig
 from xyfrag.schemas import DocumentChunk
 from xyfrag.text import normalize_text
 
@@ -76,39 +76,49 @@ class DocumentLoader:
         """
 
         title = self._extract_title(file_path, text)
-        plain_text = self._markdown_to_plain_text(text)
-        normalized = normalize_text(plain_text)
-        if not normalized:
-            return []
+        sections = self._extract_markdown_sections(text)
+        if not sections:
+            plain_text = self._markdown_to_plain_text(text)
+            sections = [(title, plain_text)]
 
-        chunk_size = self._config.chunk_size
-        overlap = min(self._config.chunk_overlap, max(chunk_size - 1, 0))
-        step = max(chunk_size - overlap, 1)
         doc_id = file_path.stem
+        source_path = self._source_path(file_path)
         chunks: list[DocumentChunk] = []
+        chunk_number = 1
 
-        for chunk_number, start in enumerate(range(0, len(normalized), step), start=1):
-            end = min(start + chunk_size, len(normalized))
-            chunk_text = normalized[start:end].strip()
-            if not chunk_text:
+        for section_title, section_text in sections:
+            normalized = normalize_text(section_text)
+            if not normalized:
                 continue
 
-            chunks.append(
-                DocumentChunk(
-                    doc_id=doc_id,
-                    chunk_id=f"{doc_id}-{chunk_number:04d}",
-                    title=title,
-                    text=chunk_text,
-                    metadata={
-                        "source_path": str(file_path),
-                        "start_char": start,
-                        "end_char": end,
-                    },
-                )
-            )
+            chunk_size = self._config.chunk_size
+            overlap = min(self._config.chunk_overlap, max(chunk_size - 1, 0))
+            step = max(chunk_size - overlap, 1)
 
-            if end >= len(normalized):
-                break
+            for start in range(0, len(normalized), step):
+                end = min(start + chunk_size, len(normalized))
+                chunk_text = normalized[start:end].strip()
+                if not chunk_text:
+                    continue
+
+                chunks.append(
+                    DocumentChunk(
+                        doc_id=doc_id,
+                        chunk_id=f"{doc_id}-{chunk_number:04d}",
+                        title=section_title or title,
+                        text=chunk_text,
+                        metadata={
+                            "source_path": source_path,
+                            "section_title": section_title or title,
+                            "start_char": start,
+                            "end_char": end,
+                        },
+                    )
+                )
+                chunk_number += 1
+
+                if end >= len(normalized):
+                    break
 
         return chunks
 
@@ -129,6 +139,15 @@ class DocumentLoader:
             if stripped.startswith("#"):
                 return stripped.lstrip("#").strip()
         return file_path.stem.replace("_", " ").replace("-", " ")
+
+    @staticmethod
+    def _source_path(file_path: Path) -> str:
+        """Return a portable source path for citation metadata."""
+
+        try:
+            return str(file_path.resolve().relative_to(PROJECT_ROOT))
+        except ValueError:
+            return str(file_path)
 
     @staticmethod
     def _markdown_to_plain_text(text: str) -> str:
@@ -152,3 +171,38 @@ class DocumentLoader:
             else:
                 lines.append(stripped)
         return "\n".join(lines)
+
+    @staticmethod
+    def _extract_markdown_sections(text: str) -> list[tuple[str, str]]:
+        """Split Markdown into heading-based knowledge sections."""
+
+        document_title = ""
+        sections: list[tuple[str, str]] = []
+        current_title = ""
+        current_lines: list[str] = []
+
+        def flush_current() -> None:
+            if current_title and current_lines:
+                heading = current_title.strip()
+                body = "\n".join([f"{heading}。", *current_lines])
+                sections.append((heading, body))
+
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("# "):
+                document_title = stripped.lstrip("#").strip()
+                continue
+            if stripped.startswith("## "):
+                flush_current()
+                current_title = stripped.lstrip("#").strip()
+                current_lines = []
+                continue
+            if current_title:
+                current_lines.append(stripped)
+
+        flush_current()
+        if sections:
+            return [(title or document_title, body) for title, body in sections]
+        return []
