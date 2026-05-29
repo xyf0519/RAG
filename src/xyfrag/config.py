@@ -10,6 +10,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 class AppConfig(BaseModel):
     """Application server settings."""
@@ -44,16 +46,19 @@ class RetrievalConfig(BaseModel):
     bm25_top_k: int = 8
     embedding_top_k: int = 8
     rerank_top_k: int = 3
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    reranker_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-    use_local_models: bool = False
+    embedding_backend: str = "bge"
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    reranker_backend: str = "bge"
+    reranker_model: str = "BAAI/bge-reranker-base"
+    use_local_models: bool = True
+    allow_model_fallback: bool = True
 
 
 class LLMConfig(BaseModel):
     """OpenAI-compatible LLM settings."""
 
     provider: str = "openai_compatible"
-    model: str = "gpt-4.1-mini"
+    model: str = "deepseek-v4-flash"
     temperature: float = 0.2
     timeout_seconds: int = 30
     max_tokens: int = 900
@@ -105,6 +110,38 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _project_path(path: Path) -> Path:
+    """Resolve a path relative to the xyfRAG project root.
+
+    Args:
+        path: User configured path.
+
+    Returns:
+        Absolute path rooted at the project directory when needed.
+    """
+
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def _resolve_settings_paths(settings: Settings) -> Settings:
+    """Resolve all filesystem paths in settings to project-rooted paths.
+
+    Args:
+        settings: Parsed settings object.
+
+    Returns:
+        Settings with absolute filesystem paths.
+    """
+
+    settings.paths.raw_docs_dir = _project_path(settings.paths.raw_docs_dir)
+    settings.paths.index_dir = _project_path(settings.paths.index_dir)
+    settings.paths.classifier_dir = _project_path(settings.paths.classifier_dir)
+    settings.paths.log_file = _project_path(settings.paths.log_file)
+    return settings
+
+
 @lru_cache(maxsize=1)
 def get_settings(config_path: str = "config/settings.yaml") -> Settings:
     """Load settings from YAML and environment variables.
@@ -120,9 +157,14 @@ def get_settings(config_path: str = "config/settings.yaml") -> Settings:
         ValueError: If the settings file is malformed.
     """
 
-    load_dotenv()
-    data = _read_yaml(Path(config_path))
-    settings = Settings.model_validate(data)
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = PROJECT_ROOT / config_file
+
+    load_dotenv(PROJECT_ROOT.parent / ".env")
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
+    data = _read_yaml(config_file)
+    settings = _resolve_settings_paths(Settings.model_validate(data))
 
     for path in (
         settings.paths.raw_docs_dir,

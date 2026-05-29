@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import json
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from typing import Any, Optional, Union
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from xyfrag.config import get_settings
@@ -57,6 +60,7 @@ class ChatResponse(BaseModel):
     used_llm: bool
     llm_elapsed_seconds: float
     total_elapsed_seconds: float
+    error_code: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -72,6 +76,7 @@ class ErrorResponse(BaseModel):
 
     ok: bool = False
     error: str
+    error_code: str = "BACKEND_UNAVAILABLE"
 
 
 def _load_or_build_index() -> KnowledgeIndex:
@@ -144,7 +149,10 @@ async def health() -> HealthResponse:
 
 
 @app.post("/chat", response_model=Union[ChatResponse, ErrorResponse])
-async def chat(request: ChatRequest) -> Union[ChatResponse, ErrorResponse]:
+async def chat(
+    request: ChatRequest,
+    x_request_id: Optional[str] = Header(default=None),
+) -> Union[ChatResponse, ErrorResponse]:
     """Run the RAG chat pipeline.
 
     Args:
@@ -155,12 +163,23 @@ async def chat(request: ChatRequest) -> Union[ChatResponse, ErrorResponse]:
     """
 
     session_id = request.session_id or str(uuid4())
+    request_id = x_request_id or str(uuid4())
     service: RAGService = app.state.rag_service
 
     try:
-        result = await service.chat(session_id=session_id, query=request.query.strip())
+        result = await service.chat(
+            session_id=session_id,
+            query=request.query.strip(),
+            request_id=request_id,
+        )
     except Exception as exc:
-        logger.error("Unhandled chat pipeline error: %s", exc, exc_info=True)
+        logger.error(
+            "request_id=%s session_id=%s stage=chat_error error=%s",
+            request_id,
+            session_id,
+            exc,
+            exc_info=True,
+        )
         return ErrorResponse(error="服务处理失败，请稍后重试。")
 
     return ChatResponse(
@@ -187,7 +206,66 @@ async def chat(request: ChatRequest) -> Union[ChatResponse, ErrorResponse]:
         used_llm=result.used_llm,
         llm_elapsed_seconds=result.llm_elapsed_seconds,
         total_elapsed_seconds=result.total_elapsed_seconds,
+        error_code=result.error_code,
         error=result.error,
+    )
+
+
+@app.post("/api/v1/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    x_request_id: Optional[str] = Header(default=None),
+) -> StreamingResponse:
+    """Run the RAG chat pipeline as newline-delimited JSON events.
+
+    Args:
+        request: Chat request payload.
+        x_request_id: Optional correlation ID propagated by the BFF.
+
+    Returns:
+        Streaming response with `application/x-ndjson` media type.
+    """
+
+    session_id = request.session_id or str(uuid4())
+    request_id = x_request_id or str(uuid4())
+    service: RAGService = app.state.rag_service
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for event in service.stream_chat(
+                session_id=session_id,
+                query=request.query.strip(),
+                request_id=request_id,
+            ):
+                yield json.dumps(
+                    {"type": event.type, "payload": event.payload},
+                    ensure_ascii=False,
+                ) + "\n"
+        except Exception as exc:
+            logger.error(
+                "request_id=%s session_id=%s stage=stream_error error=%s",
+                request_id,
+                session_id,
+                exc,
+                exc_info=True,
+            )
+            yield json.dumps(
+                {
+                    "type": "error",
+                    "payload": {
+                        "code": "BACKEND_UNAVAILABLE",
+                        "message": "服务处理失败，请稍后重试。",
+                        "retryable": True,
+                        "session_id": session_id,
+                    },
+                },
+                ensure_ascii=False,
+            ) + "\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={"X-Request-ID": request_id},
     )
 
 

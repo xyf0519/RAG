@@ -133,6 +133,60 @@ class CrossEncoderReranker:
         ]
 
 
+class BGEReranker:
+    """BGE cross-encoder reranker powered by FlagEmbedding."""
+
+    def __init__(self, model_name: str, top_k: int) -> None:
+        """Load a BGE reranker model.
+
+        Args:
+            model_name: BGE reranker model name or local path.
+            top_k: Number of top documents to return.
+
+        Returns:
+            None.
+        """
+
+        from FlagEmbedding import FlagReranker
+
+        self._model = FlagReranker(model_name, use_fp16=False)
+        self._top_k = top_k
+
+    def rerank(self, query: str, candidates: list[RetrievalCandidate]) -> list[RetrievedDocument]:
+        """Rerank candidates with a BGE reranker.
+
+        Args:
+            query: Rewritten standalone query.
+            candidates: Hybrid retrieval candidates.
+
+        Returns:
+            Top reranked documents with citation source indices.
+        """
+
+        if not candidates:
+            return []
+
+        pairs = [[query, candidate.chunk.text] for candidate in candidates]
+        raw_scores = self._model.compute_score(pairs, normalize=True)
+        if isinstance(raw_scores, float):
+            raw_scores = [raw_scores]
+        scored = [
+            (float(raw_score), candidate)
+            for raw_score, candidate in zip(raw_scores, candidates)
+        ]
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        return [
+            RetrievedDocument(
+                chunk=candidate.chunk,
+                score=score,
+                rank=rank,
+                source_index=rank,
+            )
+            for rank, (score, candidate) in enumerate(scored[: self._top_k], start=1)
+        ]
+
+
 def create_reranker(config: RetrievalConfig) -> Reranker:
     """Create a reranker from retrieval settings.
 
@@ -143,6 +197,22 @@ def create_reranker(config: RetrievalConfig) -> Reranker:
         Reranker instance.
     """
 
-    if config.use_local_models:
+    if not config.use_local_models:
+        return LexicalOverlapReranker(config.rerank_top_k)
+
+    try:
+        if config.reranker_backend == "lexical":
+            return LexicalOverlapReranker(config.rerank_top_k)
+        if config.reranker_backend == "bge":
+            return BGEReranker(config.reranker_model, config.rerank_top_k)
         return CrossEncoderReranker(config.reranker_model, config.rerank_top_k)
+    except Exception as exc:
+        if not config.allow_model_fallback:
+            raise
+        logger.warning(
+            "Reranker unavailable backend=%s model=%s; falling back to lexical: %s",
+            config.reranker_backend,
+            config.reranker_model,
+            exc,
+        )
     return LexicalOverlapReranker(config.rerank_top_k)

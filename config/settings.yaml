@@ -20,13 +20,16 @@ retrieval:
   bm25_top_k: 8
   embedding_top_k: 8
   rerank_top_k: 3
-  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-  reranker_model: cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
-  use_local_models: false
+  embedding_backend: bge
+  embedding_model: models/huggingface/bge-small-zh-v1.5
+  reranker_backend: lexical
+  reranker_model: ""
+  use_local_models: true
+  allow_model_fallback: true
 
 llm:
   provider: openai_compatible
-  model: gpt-4.1-mini
+  model: deepseek-v4-flash
   temperature: 0.2
   timeout_seconds: 30
   max_tokens: 900

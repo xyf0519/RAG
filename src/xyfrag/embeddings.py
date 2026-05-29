@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Protocol
 
 import numpy as np
 
 from xyfrag.config import RetrievalConfig
 from xyfrag.text import chunk_tokens, l2_normalize, tokenize
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingBackend(Protocol):
@@ -114,6 +117,57 @@ class SentenceTransformerEmbeddingBackend:
         )
 
 
+class BGEEmbeddingBackend:
+    """BGE embedding backend powered by FlagEmbedding.
+
+    Args:
+        model_name: Hugging Face or local BGE model name.
+    """
+
+    def __init__(self, model_name: str) -> None:
+        """Load the BGE embedding model.
+
+        Args:
+            model_name: BGE model name or local model path.
+
+        Returns:
+            None.
+        """
+
+        if "bge-m3" in model_name.lower():
+            from FlagEmbedding import BGEM3FlagModel
+
+            self._model = BGEM3FlagModel(model_name, use_fp16=False)
+            self._is_m3 = True
+        else:
+            from FlagEmbedding import FlagModel
+
+            self._model = FlagModel(
+                model_name,
+                query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
+                use_fp16=False,
+            )
+            self._is_m3 = False
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """Encode text with BGE dense vectors.
+
+        Args:
+            texts: Texts to encode.
+
+        Returns:
+            Normalized dense embedding matrix.
+        """
+
+        if self._is_m3:
+            output = self._model.encode(texts, return_dense=True)
+            dense_vectors = output["dense_vecs"]
+        else:
+            dense_vectors = self._model.encode(texts)
+        vectors = np.asarray(dense_vectors, dtype=np.float32)
+        return np.asarray([l2_normalize(vector) for vector in vectors], dtype=np.float32)
+
+
 def create_embedding_backend(config: RetrievalConfig) -> EmbeddingBackend:
     """Create an embedding backend from retrieval settings.
 
@@ -124,6 +178,20 @@ def create_embedding_backend(config: RetrievalConfig) -> EmbeddingBackend:
         Embedding backend instance.
     """
 
-    if config.use_local_models:
+    if not config.use_local_models:
+        return HashingEmbeddingBackend()
+
+    try:
+        if config.embedding_backend == "bge":
+            return BGEEmbeddingBackend(config.embedding_model)
         return SentenceTransformerEmbeddingBackend(config.embedding_model)
+    except Exception as exc:
+        if not config.allow_model_fallback:
+            raise
+        logger.warning(
+            "Embedding model unavailable backend=%s model=%s; falling back to hashing: %s",
+            config.embedding_backend,
+            config.embedding_model,
+            exc,
+        )
     return HashingEmbeddingBackend()
