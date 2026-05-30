@@ -4,14 +4,14 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/shared/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium shadow-sm transition-all disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary: "border-[var(--accent)] bg-[var(--accent)] text-white hover:bg-[var(--accent-strong)]",
-        secondary: "border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-[var(--panel-strong)]",
+        primary: "border-[var(--accent)] bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)] text-white hover:brightness-105",
+        secondary: "border-[var(--border)] bg-[var(--panel)] text-[var(--foreground)] hover:border-[var(--border-strong)] hover:bg-[var(--panel-strong)]",
         ghost: "border-transparent bg-transparent text-[var(--foreground)] hover:bg-[var(--panel-strong)]",
-        danger: "border-[#f3c0bd] bg-[#fff4f3] text-[var(--danger)] hover:bg-[#ffe7e5]",
+        danger: "border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] hover:bg-[#ffe3e0]",
       },
       size: {
         sm: "h-8 px-2 text-xs",

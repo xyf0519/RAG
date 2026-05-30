@@ -9,6 +9,7 @@ describe("ChatWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "xyfRAG" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("输入校园资料库相关问题...")).toBeInTheDocument();
+    expect(screen.getByText("可信问答工作台")).toBeInTheDocument();
     expect(screen.getByText("挂科后什么时候申请补考？")).toBeInTheDocument();
   });
 });
