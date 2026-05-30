@@ -43,6 +43,21 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
     });
   });
 
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "xyfrag.auth.v1",
+      JSON.stringify({
+        user: {
+          id: "admin",
+          name: "知识库管理员",
+          email: "admin@xyfrag.cn",
+          role: "admin",
+        },
+        issuedAt: Date.now(),
+      }),
+    );
+  });
+
   await page.goto("/");
   await page.getByPlaceholder("输入校园资料库相关问题...").fill("挂科后什么时候申请补考？");
   await page.getByRole("button", { name: "发送" }).click();

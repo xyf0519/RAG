@@ -107,6 +107,16 @@ input:focus-visible {
   overflow: hidden;
 }
 
+@media (min-width: 1024px) {
+  .product-sidebar {
+    width: 292px;
+  }
+
+  .product-sidebar--collapsed {
+    width: 64px;
+  }
+}
+
 @keyframes traceBreath {
   0%,
   100% {
@@ -130,6 +140,42 @@ input:focus-visible {
   50% {
     opacity: 0.72;
     transform: translate3d(-8px, 8px, 0) scale(1.08);
+  }
+}
+
+@keyframes pageRise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes visualFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes glowDrift {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  50% {
+    opacity: 0.92;
+    transform: translate3d(14px, 10px, 0) scale(1.05);
   }
 }
 

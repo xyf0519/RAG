@@ -19,7 +19,7 @@ import {
   History,
   Layers3,
   Loader2,
-  LogIn,
+  LogOut,
   Menu,
   MessageSquareText,
   PenLine,
@@ -34,16 +34,18 @@ import {
   ThumbsDown,
   ThumbsUp,
   UploadCloud,
-  UserRoundCog,
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { LoginScreen } from "@/features/auth/login-screen";
+import { useAuth } from "@/features/auth/auth-provider";
 import { useRagChatStream } from "@/features/chat/use-rag-chat-stream";
 import { cn, formatSeconds } from "@/shared/lib/utils";
+import type { AuthUser } from "@/shared/types/auth";
 import type { BackendHealth, ChatMessage, ChatStatusPayload, Source } from "@/shared/types/chat";
 
 const EXAMPLES = [
@@ -69,17 +71,91 @@ const EXAMPLES = [
   },
 ];
 
-const NAV_ITEMS = [
-  { label: "问答工作台", icon: MessageSquareText, active: true },
-  { label: "知识库", icon: Database, badge: "Admin" },
-  { label: "质量分析", icon: BarChart3 },
-  { label: "系统设置", icon: ShieldCheck },
+type WorkspaceView = "chat" | "knowledge" | "quality";
+
+const NAV_ITEMS: Array<{
+  id: WorkspaceView;
+  label: string;
+  icon: typeof MessageSquareText;
+  badge?: string;
+  adminOnly?: boolean;
+}> = [
+  { id: "chat", label: "问答工作台", icon: MessageSquareText },
+  { id: "knowledge", label: "知识库治理", icon: Database, badge: "管理", adminOnly: true },
+  { id: "quality", label: "质量分析", icon: BarChart3, badge: "治理", adminOnly: true },
 ];
 
-const ADMIN_ACTIONS = [
-  { label: "上传文档", icon: UploadCloud, description: "Markdown / TXT 入库" },
-  { label: "构建索引", icon: Archive, description: "刷新生效知识源" },
-  { label: "审核引用", icon: FileCheck2, description: "抽检回答可追溯性" },
+const KNOWLEDGE_SOURCES = [
+  {
+    title: "浙江大学校园一卡通图书馆功能开通办法",
+    owner: "图书馆",
+    chunks: 42,
+    updatedAt: "今天 09:24",
+    status: "已同步",
+    quality: "高",
+  },
+  {
+    title: "学生请假与销假管理说明",
+    owner: "学生事务",
+    chunks: 35,
+    updatedAt: "昨天 18:10",
+    status: "已同步",
+    quality: "高",
+  },
+  {
+    title: "宿舍管理规定摘要",
+    owner: "公寓服务",
+    chunks: 28,
+    updatedAt: "2 天前",
+    status: "待复核",
+    quality: "中",
+  },
+];
+
+const GOVERNANCE_CHECKS = [
+  { label: "引用片段可追溯", value: "已启用" },
+  { label: "越界问题拦截", value: "已启用" },
+  { label: "知识源版本记录", value: "已启用" },
+];
+
+const QUALITY_METRICS = [
+  { label: "引用命中率", value: "92.4%", detail: "近 7 天稳定", icon: FileCheck2 },
+  { label: "边界拦截", value: "18", detail: "超出资料库范围", icon: ShieldCheck },
+  { label: "正向反馈", value: "87%", detail: "用户评价汇总", icon: ThumbsUp },
+  { label: "平均耗时", value: "2.8s", detail: "问答端到端", icon: Clock3 },
+];
+
+const QUALITY_REVIEWS = [
+  {
+    title: "校园卡挂失流程",
+    issue: "引用片段重复出现",
+    owner: "图书馆",
+    priority: "高",
+    status: "待复核",
+  },
+  {
+    title: "宿舍管理规定摘要",
+    issue: "资料版本较旧",
+    owner: "公寓服务",
+    priority: "中",
+    status: "待更新",
+  },
+  {
+    title: "请假审批条件",
+    issue: "回答命中边界较窄",
+    owner: "学生事务",
+    priority: "中",
+    status: "观察中",
+  },
+];
+
+const QUALITY_TRENDS = [
+  { label: "周一", value: 64 },
+  { label: "周二", value: 78 },
+  { label: "周三", value: 72 },
+  { label: "周四", value: 88 },
+  { label: "周五", value: 82 },
+  { label: "周六", value: 92 },
 ];
 
 const RECENT_SESSIONS = [
@@ -112,13 +188,16 @@ const PROCESS_STAGES: Array<{
 ];
 
 export function ChatWorkspace() {
+  const auth = useAuth();
   const chat = useRagChatStream();
   const [input, setInput] = useState("");
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthOk, setHealthOk] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copiedAnswerId, setCopiedAnswerId] = useState<string | null>(null);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
 
   useEffect(() => {
     let mounted = true;
@@ -177,10 +256,33 @@ export function ChatWorkspace() {
     void chat.sendMessage(query);
   }
 
+  function changeWorkspaceView(view: WorkspaceView) {
+    setWorkspaceView(view);
+    setSidebarOpen(false);
+  }
+
+  function startNewSession() {
+    chat.newSession();
+    setWorkspaceView("chat");
+    setSidebarOpen(false);
+  }
+
   async function copyAnswer(message: ChatMessage) {
     await navigator.clipboard.writeText(message.content);
     setCopiedAnswerId(message.id);
     window.setTimeout(() => setCopiedAnswerId(null), 1200);
+  }
+
+  if (!auth.ready) {
+    return (
+      <main className="grid h-screen place-items-center bg-[var(--background)] text-sm text-[var(--muted)]">
+        正在恢复登录状态...
+      </main>
+    );
+  }
+
+  if (!auth.user) {
+    return <LoginScreen />;
   }
 
   return (
@@ -191,119 +293,437 @@ export function ChatWorkspace() {
           onClose={() => setSidebarOpen(false)}
           sessionId={chat.sessionId}
           latestQuestion={latestQuestion?.content}
-          onNewSession={chat.newSession}
+          onNewSession={startNewSession}
+          user={auth.user}
+          isAdmin={auth.isAdmin}
+          activeView={workspaceView}
+          collapsed={sidebarCollapsed}
+          onChangeView={changeWorkspaceView}
+          onToggleCollapse={() => setSidebarCollapsed((value) => !value)}
+          onSignOut={auth.signOut}
         />
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col transition-all duration-300 ease-out">
           <ProductHeader
             health={health}
             healthOk={healthOk}
+            user={auth.user}
+            onSignOut={auth.signOut}
             onOpenSidebar={() => setSidebarOpen(true)}
+            sidebarCollapsed={sidebarCollapsed}
+            onExpandSidebar={() => setSidebarCollapsed(false)}
           />
 
-          <div className="grid min-h-0 flex-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:grid-cols-[minmax(0,1fr)_392px] lg:gap-4 lg:px-5 lg:py-4">
-            <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] shadow-[var(--shadow-panel)]">
-              <ChatHeroStats stats={stats} />
-
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--panel)] px-4 py-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h1 className="truncate text-base font-semibold">可信问答工作台</h1>
-                    <StatusBadge status={chat.status} />
-                  </div>
-                  <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                    Session {chat.sessionId || "initializing"} · 可追溯引用与边界熔断
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {chat.status === "streaming" ? (
-                    <Button type="button" variant="danger" size="sm" onClick={chat.stop}>
-                      <Square size={14} aria-hidden="true" />
-                      停止
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={chat.retry}
-                      disabled={!chat.lastError}
-                    >
-                      <RefreshCw size={14} aria-hidden="true" />
-                      重试
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfc_55%,#f4f8fa_100%)] px-4 py-5">
-                {chat.messages.length === 0 ? (
-                  <EmptyState onPick={(example) => setInput(example)} />
-                ) : (
-                  <div className="mx-auto max-w-4xl space-y-5">
-                    {chat.messages.map((message) => (
-                      <MessageBubble
-                        key={message.id}
-                        message={message}
-                        copied={copiedAnswerId === message.id}
-                        onCopy={() => void copyAnswer(message)}
-                      />
-                    ))}
-                    {chat.status === "streaming" ? <TypingIndicator events={chat.events} /> : null}
-                  </div>
-                )}
-              </div>
-
-              {chat.lastError ? (
-                <div className="mx-4 mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
-                  {chat.lastError.message}
-                </div>
-              ) : null}
-
-              <Composer
-                input={input}
-                status={chat.status}
-                onInput={setInput}
-                onSubmit={onSubmit}
-              />
-            </section>
-
-            <aside className="hidden min-h-0 min-w-0 gap-4 overflow-hidden lg:grid lg:grid-rows-[minmax(0,1fr)_196px]">
-              <SourcePanel sources={currentSources} />
-              <ProcessPanel events={chat.events} metadata={latestMetadata} />
-            </aside>
-
-            <section className="min-h-0 overflow-y-auto lg:hidden">
-              <div className="mb-3 grid grid-cols-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-1 shadow-sm">
-                {MOBILE_TABS.map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setMobileTab(tab.id)}
-                      className={cn(
-                        "flex h-10 items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors",
-                        mobileTab === tab.id
-                          ? "bg-[var(--accent)] text-white"
-                          : "text-[var(--muted)] hover:bg-[var(--panel-strong)]",
-                      )}
-                    >
-                      <Icon size={14} aria-hidden="true" />
-                      {tab.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {mobileTab === "sources" ? <SourcePanel sources={currentSources} /> : null}
-              {mobileTab === "process" ? (
-                <ProcessPanel events={chat.events} metadata={latestMetadata} />
-              ) : null}
-            </section>
-          </div>
+          {workspaceView === "knowledge" && auth.isAdmin ? <KnowledgeAdminWorkspace /> : null}
+          {workspaceView === "quality" && auth.isAdmin ? <QualityAnalyticsWorkspace /> : null}
+          {workspaceView === "chat" || !auth.isAdmin ? (
+            <ChatWorkspaceView
+              chat={chat}
+              input={input}
+              mobileTab={mobileTab}
+              stats={stats}
+              currentSources={currentSources}
+              latestMetadata={latestMetadata}
+              copiedAnswerId={copiedAnswerId}
+              onInput={setInput}
+              onMobileTab={setMobileTab}
+              onSubmit={onSubmit}
+              onCopyAnswer={(message) => void copyAnswer(message)}
+            />
+          ) : null}
         </div>
       </div>
     </main>
+  );
+}
+
+function ChatWorkspaceView({
+  chat,
+  input,
+  mobileTab,
+  stats,
+  currentSources,
+  latestMetadata,
+  copiedAnswerId,
+  onInput,
+  onMobileTab,
+  onSubmit,
+  onCopyAnswer,
+}: {
+  chat: ReturnType<typeof useRagChatStream>;
+  input: string;
+  mobileTab: MobileTab;
+  stats: {
+    turns: number;
+    sources: number;
+    totalElapsed?: number;
+    boundary?: boolean;
+  };
+  currentSources: Source[];
+  latestMetadata: {
+    rewritten_query?: string;
+    boundary?: { is_in_scope: boolean; probability: number; reason: string };
+    timings?: { llm_elapsed_seconds: number; total_elapsed_seconds: number };
+    used_llm?: boolean;
+  };
+  copiedAnswerId: string | null;
+  onInput: (value: string) => void;
+  onMobileTab: (tab: MobileTab) => void;
+  onSubmit: (event: FormEvent) => void;
+  onCopyAnswer: (message: ChatMessage) => void;
+}) {
+  return (
+    <div className="grid min-h-0 flex-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:grid-cols-[minmax(0,1fr)_392px] lg:gap-4 lg:px-5 lg:py-4">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] shadow-[var(--shadow-panel)]">
+        <ChatHeroStats stats={stats} />
+
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--panel)] px-4 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-base font-semibold">可信问答工作台</h1>
+              <StatusBadge status={chat.status} />
+            </div>
+            <p className="mt-1 truncate text-xs text-[var(--muted)]">
+              Session {chat.sessionId || "initializing"} · 可追溯引用与边界熔断
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {chat.status === "streaming" ? (
+              <Button type="button" variant="danger" size="sm" onClick={chat.stop}>
+                <Square size={14} aria-hidden="true" />
+                停止
+              </Button>
+            ) : (
+              <Button type="button" variant="secondary" size="sm" onClick={chat.retry} disabled={!chat.lastError}>
+                <RefreshCw size={14} aria-hidden="true" />
+                重试
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfc_55%,#f4f8fa_100%)] px-4 py-5">
+          {chat.messages.length === 0 ? (
+            <EmptyState onPick={(example) => onInput(example)} />
+          ) : (
+            <div className="mx-auto max-w-4xl space-y-5">
+              {chat.messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  copied={copiedAnswerId === message.id}
+                  onCopy={() => onCopyAnswer(message)}
+                />
+              ))}
+              {chat.status === "streaming" ? <TypingIndicator events={chat.events} /> : null}
+            </div>
+          )}
+        </div>
+
+        {chat.lastError ? (
+          <div className="mx-4 mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
+            {chat.lastError.message}
+          </div>
+        ) : null}
+
+        <Composer input={input} status={chat.status} onInput={onInput} onSubmit={onSubmit} />
+      </section>
+
+      <aside className="hidden min-h-0 min-w-0 gap-4 overflow-hidden lg:grid lg:grid-rows-[minmax(0,1fr)_196px]">
+        <SourcePanel sources={currentSources} />
+        <ProcessPanel events={chat.events} metadata={latestMetadata} />
+      </aside>
+
+      <section className="min-h-0 overflow-y-auto lg:hidden">
+        <div className="mb-3 grid grid-cols-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-1 shadow-sm">
+          {MOBILE_TABS.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onMobileTab(tab.id)}
+                className={cn(
+                  "flex h-10 items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors",
+                  mobileTab === tab.id
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--muted)] hover:bg-[var(--panel-strong)]",
+                )}
+              >
+                <Icon size={14} aria-hidden="true" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        {mobileTab === "sources" ? <SourcePanel sources={currentSources} /> : null}
+        {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} /> : null}
+      </section>
+    </div>
+  );
+}
+
+function KnowledgeAdminWorkspace() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; size: number }>>([]);
+  const [indexing, setIndexing] = useState(false);
+  const [notice, setNotice] = useState("知识库已同步，引用与检索状态正常。");
+
+  function onFiles(files: FileList | null) {
+    const nextFiles = Array.from(files ?? []).map((file) => ({
+      name: file.name,
+      size: file.size,
+    }));
+    if (nextFiles.length) {
+      setSelectedFiles(nextFiles);
+      setNotice(`${nextFiles.length} 个文件已加入待入库队列。`);
+    }
+  }
+
+  function runIndexing() {
+    setIndexing(true);
+    setNotice("正在刷新知识索引。");
+    window.setTimeout(() => {
+      setIndexing(false);
+      setNotice("知识索引已更新，最新资料可用于问答。");
+    }, 1400);
+  }
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
+      <div className="mx-auto grid max-w-[1400px] gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f5faf8_100%)] p-5 shadow-[var(--shadow-panel)]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="max-w-2xl">
+                <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
+                  <Database size={14} aria-hidden="true" />
+                  Knowledge Governance
+                </div>
+                <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">知识库治理中心</h1>
+                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                  管理资料入库、索引刷新与引用质量，让团队获得稳定、可信、可追溯的知识问答体验。
+                </p>
+              </div>
+              <Button type="button" variant="primary" onClick={() => fileInputRef.current?.click()}>
+                <UploadCloud size={16} aria-hidden="true" />
+                上传文档
+              </Button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".md,.txt,.pdf,.doc,.docx"
+              className="sr-only"
+              onChange={(event) => onFiles(event.target.files)}
+            />
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <AdminMetric icon={FileText} label="知识源" value={`${KNOWLEDGE_SOURCES.length}`} />
+              <AdminMetric icon={Layers3} label="检索片段" value="105" />
+              <AdminMetric icon={CheckCircle2} label="治理状态" value="正常" />
+            </div>
+          </div>
+
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">知识源管理</h2>
+                  <p className="text-xs text-[var(--muted)]">资料来源、同步状态与引用质量</p>
+                </div>
+                <Button type="button" variant="secondary" size="sm" onClick={runIndexing} disabled={indexing}>
+                  {indexing ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+                  刷新索引
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {KNOWLEDGE_SOURCES.map((source) => (
+                  <KnowledgeSourceRow key={source.title} source={source} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <aside className="space-y-4">
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">入库队列</h2>
+              <p className="text-xs text-[var(--muted)]">{notice}</p>
+            </CardHeader>
+            <CardContent>
+              {selectedFiles.length ? (
+                <div className="space-y-2">
+                  {selectedFiles.map((file) => (
+                    <div key={`${file.name}-${file.size}`} className="rounded-lg border border-[var(--border)] bg-white px-3 py-2">
+                      <p className="truncate text-sm font-medium">{file.name}</p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">{formatFileSize(file.size)}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <PanelEmpty icon={UploadCloud} title="等待上传资料" description="支持常用文档格式，入库后可刷新索引用于问答。" />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">治理检查</h2>
+              <p className="text-xs text-[var(--muted)]">系统能力状态</p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {GOVERNANCE_CHECKS.map((check) => (
+                  <div key={check.label} className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-white px-3 py-2">
+                    <span className="text-sm text-[var(--muted)]">{check.label}</span>
+                    <span className="font-medium text-[var(--accent-strong)]">{check.value}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function QualityAnalyticsWorkspace() {
+  const [selectedReview, setSelectedReview] = useState(QUALITY_REVIEWS[0].title);
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
+      <div className="mx-auto grid max-w-[1400px] gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f5faf8_100%)] p-5 shadow-[var(--shadow-panel)]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="max-w-2xl">
+                <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
+                  <BarChart3 size={14} aria-hidden="true" />
+                  Quality Intelligence
+                </div>
+                <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">质量分析中心</h1>
+                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                  汇总回答质量、引用可信度与边界拦截表现，帮助管理员持续优化知识治理闭环。
+                </p>
+              </div>
+              <Button type="button" variant="secondary">
+                <FileCheck2 size={16} aria-hidden="true" />
+                查看复核项
+              </Button>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {QUALITY_METRICS.map((metric) => (
+                <QualityMetricCard key={metric.label} metric={metric} />
+              ))}
+            </div>
+          </div>
+
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">可信回答趋势</h2>
+                  <p className="text-xs text-[var(--muted)]">按天汇总引用完整度与用户反馈</p>
+                </div>
+                <span className="rounded-full border border-[var(--accent-soft)] bg-[var(--accent-tint)] px-2.5 py-1 text-xs font-medium text-[var(--accent-strong)]">
+                  近 7 天
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid min-h-[260px] gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                <div className="flex items-end gap-2 rounded-lg border border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfc_100%)] p-4">
+                  {QUALITY_TRENDS.map((item) => (
+                    <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2">
+                      <div className="flex h-40 w-full items-end rounded-full bg-[var(--panel-strong)] p-1">
+                        <div
+                          className="w-full rounded-full bg-[linear-gradient(180deg,#0d8b7f_0%,#006c63_100%)] shadow-[0_10px_24px_rgba(0,108,99,0.18)] transition-all duration-500 ease-out"
+                          style={{ height: `${item.value}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-[var(--muted)]">{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+                  <h3 className="text-sm font-semibold">本周洞察</h3>
+                  <div className="mt-4 space-y-3">
+                    <QualityInsight icon={CheckCircle2} label="引用完整度提升" value="+8.6%" />
+                    <QualityInsight icon={ShieldCheck} label="越界拦截稳定" value="正常" />
+                    <QualityInsight icon={Clock3} label="响应耗时下降" value="-0.4s" />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <aside className="space-y-4">
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">待复核回答</h2>
+              <p className="text-xs text-[var(--muted)]">优先处理影响引用可信度的问题</p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {QUALITY_REVIEWS.map((review) => (
+                  <button
+                    key={review.title}
+                    type="button"
+                    onClick={() => setSelectedReview(review.title)}
+                    className={cn(
+                      "w-full rounded-lg border bg-white px-3 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md",
+                      selectedReview === review.title ? "border-[var(--accent)]" : "border-[var(--border)]",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{review.title}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{review.issue}</p>
+                      </div>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
+                          review.priority === "高"
+                            ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                            : "bg-[var(--warning-soft)] text-[var(--warning)]",
+                        )}
+                      >
+                        {review.priority}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--muted)]">
+                      {review.owner} · {review.status}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">治理建议</h2>
+              <p className="text-xs text-[var(--muted)]">面向管理员的持续优化动作</p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <QualityAction title="合并重复引用" description="减少相同片段在回答中的重复展示。" />
+                <QualityAction title="更新低频资料" description="优先复核最近命中但版本较旧的文档。" />
+                <QualityAction title="观察边界问题" description="将高频超范围问题沉淀为后续知识建设线索。" />
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </section>
   );
 }
 
@@ -313,13 +733,29 @@ function ProductSidebar({
   sessionId,
   latestQuestion,
   onNewSession,
+  user,
+  isAdmin,
+  activeView,
+  collapsed,
+  onChangeView,
+  onToggleCollapse,
+  onSignOut,
 }: {
   open: boolean;
   onClose: () => void;
   sessionId: string;
   latestQuestion?: string;
   onNewSession: () => void;
+  user: AuthUser;
+  isAdmin: boolean;
+  activeView: WorkspaceView;
+  collapsed: boolean;
+  onChangeView: (view: WorkspaceView) => void;
+  onToggleCollapse: () => void;
+  onSignOut: () => void;
 }) {
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+
   return (
     <>
       <div
@@ -331,13 +767,14 @@ function ProductSidebar({
       />
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-transform lg:static lg:z-auto lg:h-full lg:translate-x-0 lg:shadow-none",
+          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-all duration-300 ease-out lg:static lg:z-auto lg:h-full lg:translate-x-0 lg:overflow-visible lg:shadow-none",
+          collapsed ? "product-sidebar--collapsed" : "",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 items-center justify-between border-b border-[var(--border)] px-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
+        <div className={cn("flex h-16 shrink-0 items-center border-b border-[var(--border)] px-3", collapsed ? "lg:justify-center" : "justify-between")}>
+          <div className={cn("flex min-w-0 items-center gap-3", collapsed ? "lg:hidden" : "")}>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
               <BookOpenText size={20} aria-hidden="true" />
             </div>
             <div className="min-w-0">
@@ -345,6 +782,18 @@ function ProductSidebar({
               <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
             </div>
           </div>
+          <button
+            type="button"
+            className={cn(
+              "hidden h-9 w-9 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)] lg:flex",
+              collapsed ? "" : "border border-[var(--border)] bg-white/70",
+            )}
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
+          >
+            <Menu size={18} aria-hidden="true" />
+          </button>
           <button
             type="button"
             className="rounded-md p-2 text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
@@ -355,116 +804,148 @@ function ProductSidebar({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 py-4">
-          <Button type="button" variant="primary" className="w-full justify-center" onClick={onNewSession}>
-            <Plus size={15} aria-hidden="true" />
-            新建问答
-          </Button>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className={cn("shrink-0 px-3 py-3", collapsed ? "lg:px-2" : "")}>
+            {collapsed ? (
+              <button
+                type="button"
+                onClick={onNewSession}
+                className="group relative hidden h-10 w-full items-center justify-center rounded-lg text-slate-700 transition hover:bg-white hover:text-slate-950 hover:shadow-sm lg:flex"
+                aria-label="新建问答"
+                title="新建问答"
+              >
+                <PenLine size={18} strokeWidth={2.1} aria-hidden="true" />
+                <IconTooltip label="新建问答" />
+              </button>
+            ) : (
+              <Button type="button" variant="primary" className="w-full justify-center" onClick={onNewSession}>
+                <Plus size={15} aria-hidden="true" />
+                新建问答
+              </Button>
+            )}
 
-          <nav className="mt-5 space-y-1">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  className={cn(
-                    "flex h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all",
-                    item.active
-                      ? "border border-[var(--accent-soft)] bg-[linear-gradient(90deg,var(--accent-soft)_0%,rgba(255,255,255,0.72)_100%)] text-[var(--accent-strong)] shadow-sm"
-                      : "text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]",
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    <Icon size={16} aria-hidden="true" />
-                    {item.label}
-                  </span>
-                  {item.badge ? (
-                    <span className="rounded-sm bg-white px-1.5 py-0.5 text-[10px] text-[var(--accent-strong)]">
-                      {item.badge}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="mt-6">
-            <div className="mb-2 flex items-center justify-between px-1">
-              <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">当前会话</h3>
-              <History size={14} className="text-[var(--muted)]" aria-hidden="true" />
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 shadow-sm">
-              <p className="line-clamp-2 text-sm font-medium">
-                {latestQuestion || "等待开始新的资料库问答"}
-              </p>
-              <p className="mt-2 truncate text-xs text-[var(--muted)]">{sessionId || "-"}</p>
-            </div>
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between px-1">
-              <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">历史会话</h3>
-              <Search size={14} className="text-[var(--muted)]" aria-hidden="true" />
-            </div>
-            <div className="space-y-2">
-              {RECENT_SESSIONS.map((session) => (
-                <button
-                  key={session.title}
-                  type="button"
-                  className="w-full rounded-md border border-[var(--border)] bg-white/72 px-3 py-2 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
-                >
-                  <span className="block truncate text-sm text-[var(--foreground)]">
-                    {session.title}
-                  </span>
-                  <span className="mt-1 block text-xs text-[var(--muted)]">{session.time}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between px-1">
-              <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">管理员快捷操作</h3>
-              <UserRoundCog size={14} className="text-[var(--muted)]" aria-hidden="true" />
-            </div>
-            <div className="space-y-2">
-              {ADMIN_ACTIONS.map((action) => {
-                const Icon = action.icon;
-                return (
+            <nav className={cn("space-y-1", collapsed ? "lg:mt-2" : "mt-5")}>
+              {visibleNavItems.map((item) => {
+                const Icon = item.icon;
+                const active = item.id === activeView;
+                return collapsed ? (
                   <button
-                    key={action.label}
+                    key={item.id}
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-md border border-[var(--border)] bg-white/78 px-3 py-2 text-left shadow-sm transition-colors hover:border-[var(--border-strong)] hover:bg-white"
+                    onClick={() => onChangeView(item.id)}
+                    className={cn(
+                      "group relative hidden h-10 w-full items-center justify-center rounded-lg transition lg:flex",
+                      active
+                        ? "bg-white text-[var(--accent-strong)] shadow-sm"
+                        : "text-slate-700 hover:bg-white hover:text-slate-950 hover:shadow-sm",
+                    )}
+                    aria-label={item.label}
+                    title={item.label}
                   >
-                    <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--panel-strong)] text-[var(--accent-strong)]">
-                      <Icon size={15} aria-hidden="true" />
+                    <Icon size={18} strokeWidth={2.1} aria-hidden="true" />
+                    <IconTooltip label={item.label} />
+                  </button>
+                ) : (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChangeView(item.id)}
+                    className={cn(
+                      "flex h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all",
+                      active
+                        ? "border border-[var(--accent-soft)] bg-[linear-gradient(90deg,var(--accent-soft)_0%,rgba(255,255,255,0.72)_100%)] text-[var(--accent-strong)] shadow-sm"
+                        : "text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]",
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Icon size={16} aria-hidden="true" />
+                      {item.label}
                     </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">{action.label}</span>
-                      <span className="block truncate text-xs text-[var(--muted)]">
-                        {action.description}
+                    {item.badge ? (
+                      <span className="rounded-sm bg-white px-1.5 py-0.5 text-[10px] text-[var(--accent-strong)]">
+                        {item.badge}
                       </span>
-                    </span>
+                    ) : null}
                   </button>
                 );
               })}
+            </nav>
+          </div>
+
+          <div className={cn("min-h-0 flex-1 overflow-y-auto px-3 pb-4", collapsed ? "lg:hidden" : "")}>
+            <div>
+              <div className="mb-2 flex items-center justify-between px-1">
+                <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">当前会话</h3>
+                <History size={14} className="text-[var(--muted)]" aria-hidden="true" />
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 shadow-sm">
+                <p className="line-clamp-2 text-sm font-medium">
+                  {latestQuestion || "等待开始新的资料库问答"}
+                </p>
+                <p className="mt-2 truncate text-xs text-[var(--muted)]">{sessionId || "-"}</p>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-2 flex items-center justify-between px-1">
+                <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">历史会话</h3>
+                <Search size={14} className="text-[var(--muted)]" aria-hidden="true" />
+              </div>
+              <div className="space-y-2">
+                {RECENT_SESSIONS.map((session) => (
+                  <button
+                    key={session.title}
+                    type="button"
+                    className="w-full rounded-md border border-[var(--border)] bg-white/72 px-3 py-2 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+                  >
+                    <span className="block truncate text-sm text-[var(--foreground)]">
+                      {session.title}
+                    </span>
+                    <span className="mt-1 block text-xs text-[var(--muted)]">{session.time}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="border-t border-[var(--border)] p-3">
-          <div className="rounded-lg border border-[var(--border)] bg-white/82 p-3 shadow-sm">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent-strong)]">
-                <ShieldCheck size={15} aria-hidden="true" />
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">演示管理员</p>
-                <p className="truncate text-xs text-[var(--muted)]">登录与权限将在下一阶段接入</p>
+        <div className={cn("shrink-0 border-t border-[var(--border)] p-3", collapsed ? "lg:px-2" : "")}>
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="group relative hidden h-10 w-full items-center justify-center rounded-lg bg-white text-[var(--accent-strong)] shadow-sm transition hover:bg-[var(--panel-strong)] lg:flex"
+              aria-label={`${user.name} · 退出登录`}
+              title={`${user.name} · 退出登录`}
+            >
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold">
+                {user.name.slice(0, 1)}
+              </span>
+              <IconTooltip label={`${user.name} · 退出登录`} />
+            </button>
+          ) : (
+            <div className="rounded-lg border border-[var(--border)] bg-white/82 p-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent-strong)]">
+                  <ShieldCheck size={15} aria-hidden="true" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold">{user.name}</p>
+                  <p className="truncate text-xs text-[var(--muted)]">
+                    {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]"
+                  title="退出登录"
+                >
+                  <LogOut size={15} aria-hidden="true" />
+                </button>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </aside>
     </>
@@ -474,11 +955,19 @@ function ProductSidebar({
 function ProductHeader({
   health,
   healthOk,
+  user,
+  onSignOut,
   onOpenSidebar,
+  sidebarCollapsed,
+  onExpandSidebar,
 }: {
   health: BackendHealth | null;
   healthOk: boolean;
+  user: AuthUser;
+  onSignOut: () => void;
   onOpenSidebar: () => void;
+  sidebarCollapsed: boolean;
+  onExpandSidebar: () => void;
 }) {
   return (
     <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/88 backdrop-blur-xl">
@@ -492,6 +981,17 @@ function ProductHeader({
           >
             <Menu size={18} aria-hidden="true" />
           </button>
+          {sidebarCollapsed ? (
+            <button
+              type="button"
+              className="hidden h-9 w-9 items-center justify-center rounded-md border border-[var(--border)] bg-white text-[var(--muted)] shadow-sm transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)] lg:flex"
+              onClick={onExpandSidebar}
+              aria-label="展开侧栏"
+              title="展开侧栏"
+            >
+              <Menu size={18} aria-hidden="true" />
+            </button>
+          ) : null}
           <div className="hidden min-w-0 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 py-2 shadow-sm md:flex">
             <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
             <span className="truncate text-sm text-[var(--muted)]">搜索会话、文档或引用来源</span>
@@ -515,13 +1015,21 @@ function ProductHeader({
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
           <HealthPill ok={healthOk} label={health?.app ?? "backend"} />
-          <Button type="button" variant="secondary" size="sm" title="登录入口">
-            <LogIn size={15} aria-hidden="true" />
-            <span className="hidden sm:inline">登录</span>
+          <Button type="button" variant="secondary" size="sm" title={`${user.name} · 退出登录`} onClick={onSignOut}>
+            <LogOut size={15} aria-hidden="true" />
+            <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
           </Button>
         </div>
       </div>
     </header>
+  );
+}
+
+function IconTooltip({ label }: { label: string }) {
+  return (
+    <span className="pointer-events-none absolute left-[calc(100%+12px)] top-1/2 z-[80] hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-black px-3 py-1.5 text-sm font-semibold text-white opacity-0 shadow-[0_10px_28px_rgba(15,23,42,0.22)] transition-all duration-200 ease-out group-hover:translate-x-0.5 group-hover:opacity-100 lg:block">
+      {label}
+    </span>
   );
 }
 
@@ -589,6 +1097,128 @@ function HealthPill({ ok, label }: { ok: boolean; label: string }) {
       <span className={ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}>
         {ok ? "在线" : "离线"}
       </span>
+    </div>
+  );
+}
+
+function AdminMetric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof FileText;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white/82 p-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+          <Icon size={17} aria-hidden="true" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-xs text-[var(--muted)]">{label}</p>
+          <p className="truncate text-lg font-semibold">{value}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeSourceRow({
+  source,
+}: {
+  source: (typeof KNOWLEDGE_SOURCES)[number];
+}) {
+  const needsReview = source.status === "待复核";
+  return (
+    <article className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm transition hover:border-[var(--accent)] hover:shadow-md">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="break-words text-sm font-semibold">{source.title}</h3>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-xs font-medium",
+                needsReview
+                  ? "bg-[var(--warning-soft)] text-[var(--warning)]"
+                  : "bg-[var(--accent-soft)] text-[var(--accent-strong)]",
+              )}
+            >
+              {source.status}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            {source.owner} · {source.chunks} 个片段 · {source.updatedAt}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-md border border-[var(--border)] bg-[var(--panel-muted)] px-2 py-1 text-xs text-[var(--muted)]">
+            质量 {source.quality}
+          </span>
+          <Button type="button" variant="ghost" size="icon" title="查看详情">
+            <ChevronRight size={15} aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function QualityMetricCard({
+  metric,
+}: {
+  metric: (typeof QUALITY_METRICS)[number];
+}) {
+  const Icon = metric.icon;
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white/84 p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs text-[var(--muted)]">{metric.label}</p>
+          <p className="mt-2 text-2xl font-semibold leading-none">{metric.value}</p>
+          <p className="mt-2 truncate text-xs text-[var(--muted)]">{metric.detail}</p>
+        </div>
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+          <Icon size={17} aria-hidden="true" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QualityInsight({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof CheckCircle2;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--panel-muted)] px-3 py-2">
+      <span className="flex min-w-0 items-center gap-2 text-sm text-[var(--muted)]">
+        <Icon size={15} className="shrink-0 text-[var(--accent)]" aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="shrink-0 text-sm font-semibold">{value}</span>
+    </div>
+  );
+}
+
+function QualityAction({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white p-3 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+          <CheckCircle2 size={14} aria-hidden="true" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{title}</p>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{description}</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1025,4 +1655,14 @@ function CopyButton({ text }: { text: string }) {
       )}
     </Button>
   );
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
