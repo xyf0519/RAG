@@ -36,6 +36,7 @@ import {
   UploadCloud,
   Wifi,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
@@ -46,7 +47,14 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useRagChatStream } from "@/features/chat/use-rag-chat-stream";
 import { cn, formatSeconds } from "@/shared/lib/utils";
 import type { AuthUser } from "@/shared/types/auth";
-import type { BackendHealth, ChatMessage, ChatStatusPayload, Source } from "@/shared/types/chat";
+import type {
+  BackendHealth,
+  ChatMessage,
+  ChatSessionSummary,
+  ChatStatusPayload,
+  FeedbackRating,
+  Source,
+} from "@/shared/types/chat";
 
 const EXAMPLES = [
   {
@@ -118,13 +126,6 @@ const GOVERNANCE_CHECKS = [
   { label: "知识源版本记录", value: "已启用" },
 ];
 
-const QUALITY_METRICS = [
-  { label: "引用命中率", value: "92.4%", detail: "近 7 天稳定", icon: FileCheck2 },
-  { label: "边界拦截", value: "18", detail: "超出资料库范围", icon: ShieldCheck },
-  { label: "正向反馈", value: "87%", detail: "用户评价汇总", icon: ThumbsUp },
-  { label: "平均耗时", value: "2.8s", detail: "问答端到端", icon: Clock3 },
-];
-
 const QUALITY_REVIEWS = [
   {
     title: "校园卡挂失流程",
@@ -158,12 +159,6 @@ const QUALITY_TRENDS = [
   { label: "周六", value: 92 },
 ];
 
-const RECENT_SESSIONS = [
-  { title: "校园卡挂失流程", time: "2 分钟前" },
-  { title: "请假审批需要哪些条件？", time: "昨天" },
-  { title: "宿舍管理规定摘要", time: "2 天前" },
-];
-
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
   { id: "sources", label: "引用", icon: FileText },
@@ -172,6 +167,18 @@ const MOBILE_TABS = [
 
 type MobileTab = (typeof MOBILE_TABS)[number]["id"];
 type TraceStage = "idle" | "boundary" | "rewrite" | "retrieve" | "rerank" | "generate" | "complete";
+type FeedbackStats = {
+  positive: number;
+  negative: number;
+  favorites: number;
+  total: number;
+};
+type QualityMetric = {
+  label: string;
+  value: string;
+  detail: string;
+  icon: LucideIcon;
+};
 
 const PROCESS_STAGES: Array<{
   id: TraceStage;
@@ -244,6 +251,15 @@ export function ChatWorkspace() {
     totalElapsed: latestMetadata.timings?.total_elapsed_seconds,
     boundary: latestMetadata.boundary?.is_in_scope,
   };
+  const feedbackStats = useMemo(() => {
+    const assistantMessages = chat.messages.filter((message) => message.role === "assistant");
+    return {
+      positive: assistantMessages.filter((message) => message.feedback?.rating === "up").length,
+      negative: assistantMessages.filter((message) => message.feedback?.rating === "down").length,
+      favorites: assistantMessages.filter((message) => message.favorite).length,
+      total: assistantMessages.filter((message) => message.feedback).length,
+    };
+  }, [chat.messages]);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -267,10 +283,27 @@ export function ChatWorkspace() {
     setSidebarOpen(false);
   }
 
+  function openStoredSession(nextSessionId: string) {
+    chat.openSession(nextSessionId);
+    setWorkspaceView("chat");
+    setSidebarOpen(false);
+  }
+
   async function copyAnswer(message: ChatMessage) {
     await navigator.clipboard.writeText(message.content);
     setCopiedAnswerId(message.id);
     window.setTimeout(() => setCopiedAnswerId(null), 1200);
+  }
+
+  function submitFeedback(message: ChatMessage, rating: FeedbackRating) {
+    const nextFeedback =
+      message.feedback?.rating === rating
+        ? null
+        : {
+            rating,
+            createdAt: Date.now(),
+          };
+    chat.updateMessageFeedback(message.id, nextFeedback);
   }
 
   if (!auth.ready) {
@@ -293,7 +326,9 @@ export function ChatWorkspace() {
           onClose={() => setSidebarOpen(false)}
           sessionId={chat.sessionId}
           latestQuestion={latestQuestion?.content}
+          sessions={chat.sessions}
           onNewSession={startNewSession}
+          onOpenSession={openStoredSession}
           user={auth.user}
           isAdmin={auth.isAdmin}
           activeView={workspaceView}
@@ -315,7 +350,7 @@ export function ChatWorkspace() {
           />
 
           {workspaceView === "knowledge" && auth.isAdmin ? <KnowledgeAdminWorkspace /> : null}
-          {workspaceView === "quality" && auth.isAdmin ? <QualityAnalyticsWorkspace /> : null}
+          {workspaceView === "quality" && auth.isAdmin ? <QualityAnalyticsWorkspace feedbackStats={feedbackStats} /> : null}
           {workspaceView === "chat" || !auth.isAdmin ? (
             <ChatWorkspaceView
               chat={chat}
@@ -324,11 +359,14 @@ export function ChatWorkspace() {
               stats={stats}
               currentSources={currentSources}
               latestMetadata={latestMetadata}
+              feedbackStats={feedbackStats}
               copiedAnswerId={copiedAnswerId}
               onInput={setInput}
               onMobileTab={setMobileTab}
               onSubmit={onSubmit}
               onCopyAnswer={(message) => void copyAnswer(message)}
+              onFeedback={submitFeedback}
+              onToggleFavorite={chat.toggleFavorite}
             />
           ) : null}
         </div>
@@ -344,11 +382,14 @@ function ChatWorkspaceView({
   stats,
   currentSources,
   latestMetadata,
+  feedbackStats,
   copiedAnswerId,
   onInput,
   onMobileTab,
   onSubmit,
   onCopyAnswer,
+  onFeedback,
+  onToggleFavorite,
 }: {
   chat: ReturnType<typeof useRagChatStream>;
   input: string;
@@ -366,11 +407,14 @@ function ChatWorkspaceView({
     timings?: { llm_elapsed_seconds: number; total_elapsed_seconds: number };
     used_llm?: boolean;
   };
+  feedbackStats: FeedbackStats;
   copiedAnswerId: string | null;
   onInput: (value: string) => void;
   onMobileTab: (tab: MobileTab) => void;
   onSubmit: (event: FormEvent) => void;
   onCopyAnswer: (message: ChatMessage) => void;
+  onFeedback: (message: ChatMessage, rating: FeedbackRating) => void;
+  onToggleFavorite: (messageId: string) => void;
 }) {
   return (
     <div className="grid min-h-0 flex-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:grid-cols-[minmax(0,1fr)_392px] lg:gap-4 lg:px-5 lg:py-4">
@@ -413,6 +457,8 @@ function ChatWorkspaceView({
                   message={message}
                   copied={copiedAnswerId === message.id}
                   onCopy={() => onCopyAnswer(message)}
+                  onFeedback={(rating) => onFeedback(message, rating)}
+                  onToggleFavorite={() => onToggleFavorite(message.id)}
                 />
               ))}
               {chat.status === "streaming" ? <TypingIndicator events={chat.events} /> : null}
@@ -431,7 +477,7 @@ function ChatWorkspaceView({
 
       <aside className="hidden min-h-0 min-w-0 gap-4 overflow-hidden lg:grid lg:grid-rows-[minmax(0,1fr)_196px]">
         <SourcePanel sources={currentSources} />
-        <ProcessPanel events={chat.events} metadata={latestMetadata} />
+        <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} />
       </aside>
 
       <section className="min-h-0 overflow-y-auto lg:hidden">
@@ -457,7 +503,7 @@ function ChatWorkspaceView({
           })}
         </div>
         {mobileTab === "sources" ? <SourcePanel sources={currentSources} /> : null}
-        {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} /> : null}
+        {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} /> : null}
       </section>
     </div>
   );
@@ -592,8 +638,18 @@ function KnowledgeAdminWorkspace() {
   );
 }
 
-function QualityAnalyticsWorkspace() {
+function QualityAnalyticsWorkspace({ feedbackStats }: { feedbackStats: FeedbackStats }) {
   const [selectedReview, setSelectedReview] = useState(QUALITY_REVIEWS[0].title);
+  const positiveRate =
+    feedbackStats.total > 0
+      ? `${Math.round((feedbackStats.positive / feedbackStats.total) * 100)}%`
+      : "待积累";
+  const liveMetrics = [
+    { label: "引用命中率", value: "92.4%", detail: "近 7 天稳定", icon: FileCheck2 },
+    { label: "用户正反馈", value: positiveRate, detail: `${feedbackStats.total} 条反馈已沉淀`, icon: ThumbsUp },
+    { label: "收藏回答", value: `${feedbackStats.favorites}`, detail: "可沉淀为优质样例", icon: Star },
+    { label: "待优化反馈", value: `${feedbackStats.negative}`, detail: "进入复核队列", icon: ThumbsDown },
+  ];
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
@@ -618,7 +674,7 @@ function QualityAnalyticsWorkspace() {
             </div>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {QUALITY_METRICS.map((metric) => (
+              {liveMetrics.map((metric) => (
                 <QualityMetricCard key={metric.label} metric={metric} />
               ))}
             </div>
@@ -732,7 +788,9 @@ function ProductSidebar({
   onClose,
   sessionId,
   latestQuestion,
+  sessions,
   onNewSession,
+  onOpenSession,
   user,
   isAdmin,
   activeView,
@@ -745,7 +803,9 @@ function ProductSidebar({
   onClose: () => void;
   sessionId: string;
   latestQuestion?: string;
+  sessions: ChatSessionSummary[];
   onNewSession: () => void;
+  onOpenSession: (sessionId: string) => void;
   user: AuthUser;
   isAdmin: boolean;
   activeView: WorkspaceView;
@@ -892,18 +952,26 @@ function ProductSidebar({
                 <Search size={14} className="text-[var(--muted)]" aria-hidden="true" />
               </div>
               <div className="space-y-2">
-                {RECENT_SESSIONS.map((session) => (
+                {sessions.length ? sessions.map((session) => (
                   <button
-                    key={session.title}
+                    key={session.id}
                     type="button"
+                    onClick={() => onOpenSession(session.id)}
                     className="w-full rounded-md border border-[var(--border)] bg-white/72 px-3 py-2 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
                   >
                     <span className="block truncate text-sm text-[var(--foreground)]">
                       {session.title}
                     </span>
-                    <span className="mt-1 block text-xs text-[var(--muted)]">{session.time}</span>
+                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+                      <span>{formatRelativeTime(session.updatedAt)}</span>
+                      <span>{session.turnCount} 轮</span>
+                    </span>
                   </button>
-                ))}
+                )) : (
+                  <div className="rounded-lg border border-dashed border-[var(--border)] bg-white/58 px-3 py-4 text-sm text-[var(--muted)]">
+                    完成一次问答后，会话会自动保存在这里。
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1168,7 +1236,7 @@ function KnowledgeSourceRow({
 function QualityMetricCard({
   metric,
 }: {
-  metric: (typeof QUALITY_METRICS)[number];
+  metric: QualityMetric;
 }) {
   const Icon = metric.icon;
   return (
@@ -1290,10 +1358,14 @@ function MessageBubble({
   message,
   copied,
   onCopy,
+  onFeedback,
+  onToggleFavorite,
 }: {
   message: ChatMessage;
   copied: boolean;
   onCopy: () => void;
+  onFeedback: (rating: FeedbackRating) => void;
+  onToggleFavorite: () => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -1324,9 +1396,29 @@ function MessageBubble({
         {!isUser ? (
           <div className="mt-3 flex items-center gap-1 border-t border-[var(--border)] pt-2 text-[var(--muted)]">
             <IconAction label={copied ? "已复制" : "复制回答"} onClick={onCopy} icon={Copy} />
-            <IconAction label="收藏" icon={Star} />
-            <IconAction label="回答有帮助" icon={ThumbsUp} />
-            <IconAction label="回答需改进" icon={ThumbsDown} />
+            <IconAction
+              label={message.favorite ? "已收藏" : "收藏回答"}
+              icon={Star}
+              active={Boolean(message.favorite)}
+              onClick={onToggleFavorite}
+            />
+            <IconAction
+              label={message.feedback?.rating === "up" ? "已记录有帮助" : "回答有帮助"}
+              icon={ThumbsUp}
+              active={message.feedback?.rating === "up"}
+              onClick={() => onFeedback("up")}
+            />
+            <IconAction
+              label={message.feedback?.rating === "down" ? "已加入复核" : "回答待改进"}
+              icon={ThumbsDown}
+              active={message.feedback?.rating === "down"}
+              onClick={() => onFeedback("down")}
+            />
+            {message.feedback ? (
+              <span role="status" className="ml-1 rounded-full bg-[var(--panel-strong)] px-2 py-1 text-xs text-[var(--muted)]">
+                {message.feedback.rating === "up" ? "反馈已记录" : "已进入复核"}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </article>
@@ -1338,10 +1430,12 @@ function IconAction({
   label,
   icon: Icon,
   onClick,
+  active = false,
 }: {
   label: string;
   icon: typeof Copy;
   onClick?: () => void;
+  active?: boolean;
 }) {
   return (
     <button
@@ -1349,7 +1443,10 @@ function IconAction({
       title={label}
       aria-label={label}
       onClick={onClick}
-      className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]"
+      className={cn(
+        "flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]",
+        active ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]" : "text-[var(--muted)]",
+      )}
     >
       <Icon size={15} aria-hidden="true" />
     </button>
@@ -1511,6 +1608,7 @@ function SourceFilter({
 function ProcessPanel({
   events,
   metadata,
+  feedbackStats,
 }: {
   events: ChatStatusPayload[];
   metadata: {
@@ -1519,6 +1617,7 @@ function ProcessPanel({
     timings?: { llm_elapsed_seconds: number; total_elapsed_seconds: number };
     used_llm?: boolean;
   };
+  feedbackStats: FeedbackStats;
 }) {
   const statusByStage = new Map(events.map((event) => [event.stage, event]));
   const activeStage = (events.at(-1)?.stage ?? "idle") as TraceStage;
@@ -1596,6 +1695,7 @@ function ProcessPanel({
                   }
                 />
                 <TracePill label="模式" value={metadata.used_llm ? "LLM" : "本地"} />
+                <TracePill label="反馈" value={feedbackStats.total ? `${feedbackStats.positive}/${feedbackStats.total}` : "-"} />
               </div>
             </div>
           </div>
@@ -1665,4 +1765,29 @@ function formatFileSize(size: number) {
     return `${(size / 1024).toFixed(1)} KB`;
   }
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatRelativeTime(timestamp: number) {
+  const elapsed = Date.now() - timestamp;
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (elapsed < minute) {
+    return "刚刚";
+  }
+  if (elapsed < hour) {
+    return `${Math.floor(elapsed / minute)} 分钟前`;
+  }
+  if (elapsed < day) {
+    return `${Math.floor(elapsed / hour)} 小时前`;
+  }
+  if (elapsed < day * 7) {
+    return `${Math.floor(elapsed / day)} 天前`;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(timestamp);
 }

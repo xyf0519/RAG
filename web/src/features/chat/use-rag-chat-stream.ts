@@ -6,20 +6,24 @@ import { readNdjsonStream } from "@/shared/lib/ndjson";
 import { createId } from "@/shared/lib/utils";
 import type {
   ChatErrorPayload,
+  ChatFeedback,
   ChatFinalPayload,
   ChatMessage,
+  ChatSessionSummary,
   ChatStatusPayload,
   Source,
 } from "@/shared/types/chat";
 
 const STORAGE_KEY = "xyfrag.chat.v1";
 const SESSION_KEY = "xyfrag.session.v1";
+const SESSIONS_KEY = "xyfrag.sessions.v1";
 
 type StreamStatus = "idle" | "streaming" | "error";
 
 export function useRagChatStream() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [status, setStatus] = useState<StreamStatus>("idle");
   const [events, setEvents] = useState<ChatStatusPayload[]>([]);
   const [activeSources, setActiveSources] = useState<Source[]>([]);
@@ -34,19 +38,57 @@ export function useRagChatStream() {
     setSessionId(nextSession);
     window.localStorage.setItem(SESSION_KEY, nextSession);
 
-    const storedMessages = window.localStorage.getItem(STORAGE_KEY);
+    const storedMessages = window.localStorage.getItem(`${STORAGE_KEY}.${nextSession}`);
     if (storedMessages) {
       try {
         setMessages(JSON.parse(storedMessages) as ChatMessage[]);
       } catch {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(`${STORAGE_KEY}.${nextSession}`);
+      }
+    } else {
+      const legacyMessages = window.localStorage.getItem(STORAGE_KEY);
+      if (legacyMessages) {
+        try {
+          setMessages(JSON.parse(legacyMessages) as ChatMessage[]);
+          window.localStorage.setItem(`${STORAGE_KEY}.${nextSession}`, legacyMessages);
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          window.localStorage.removeItem(STORAGE_KEY);
+        }
+      }
+    }
+
+    const storedSessions = window.localStorage.getItem(SESSIONS_KEY);
+    if (storedSessions) {
+      try {
+        setSessions(JSON.parse(storedSessions) as ChatSessionSummary[]);
+      } catch {
+        window.localStorage.removeItem(SESSIONS_KEY);
       }
     }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-20)));
-  }, [messages]);
+    if (!sessionId) {
+      return;
+    }
+
+    const nextMessages = messages.slice(-40);
+    window.localStorage.setItem(`${STORAGE_KEY}.${sessionId}`, JSON.stringify(nextMessages));
+    if (!nextMessages.length) {
+      return;
+    }
+
+    const nextSummary = buildSessionSummary(sessionId, nextMessages);
+    setSessions((current) => {
+      const withoutCurrent = current.filter((session) => session.id !== sessionId);
+      const nextSessions = [nextSummary, ...withoutCurrent]
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 24);
+      window.localStorage.setItem(SESSIONS_KEY, JSON.stringify(nextSessions));
+      return nextSessions;
+    });
+  }, [messages, sessionId]);
 
   const sendMessage = useCallback(
     async (query: string) => {
@@ -124,6 +166,14 @@ export function useRagChatStream() {
           if (event.type === "final") {
             setActiveFinal(event.payload);
             setActiveSources(event.payload.sources);
+            if (sessionId && event.payload.session_id !== sessionId) {
+              window.localStorage.removeItem(`${STORAGE_KEY}.${sessionId}`);
+              setSessions((current) => {
+                const nextSessions = current.filter((session) => session.id !== sessionId);
+                window.localStorage.setItem(SESSIONS_KEY, JSON.stringify(nextSessions));
+                return nextSessions;
+              });
+            }
             setSessionId(event.payload.session_id);
             window.localStorage.setItem(SESSION_KEY, event.payload.session_id);
             setMessages((current) =>
@@ -198,7 +248,60 @@ export function useRagChatStream() {
     setLastError(null);
     setStatus("idle");
     window.localStorage.setItem(SESSION_KEY, nextSession);
-    window.localStorage.removeItem(STORAGE_KEY);
+  }, []);
+
+  const openSession = useCallback(
+    (nextSessionId: string) => {
+      if (nextSessionId === sessionId) {
+        return;
+      }
+
+      abortRef.current?.abort();
+      const storedMessages = window.localStorage.getItem(`${STORAGE_KEY}.${nextSessionId}`);
+      setSessionId(nextSessionId);
+      try {
+        setMessages(storedMessages ? (JSON.parse(storedMessages) as ChatMessage[]) : []);
+      } catch {
+        window.localStorage.removeItem(`${STORAGE_KEY}.${nextSessionId}`);
+        setMessages([]);
+      }
+      setEvents([]);
+      setActiveSources([]);
+      setActiveFinal(null);
+      setLastError(null);
+      setStatus("idle");
+      window.localStorage.setItem(SESSION_KEY, nextSessionId);
+    },
+    [sessionId],
+  );
+
+  const updateMessageFeedback = useCallback(
+    (messageId: string, feedback: ChatFeedback | null) => {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                feedback: feedback ?? undefined,
+              }
+            : message,
+        ),
+      );
+    },
+    [],
+  );
+
+  const toggleFavorite = useCallback((messageId: string) => {
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              favorite: !message.favorite,
+            }
+          : message,
+      ),
+    );
   }, []);
 
   const latestAssistant = useMemo(
@@ -209,6 +312,7 @@ export function useRagChatStream() {
   return {
     messages,
     sessionId,
+    sessions,
     status,
     events,
     activeSources,
@@ -219,5 +323,28 @@ export function useRagChatStream() {
     stop,
     retry,
     newSession,
+    openSession,
+    updateMessageFeedback,
+    toggleFavorite,
+  };
+}
+
+function buildSessionSummary(sessionId: string, messages: ChatMessage[]): ChatSessionSummary {
+  const firstUserMessage = messages.find((message) => message.role === "user");
+  const assistantMessages = messages.filter((message) => message.role === "assistant");
+  const updatedAt = Math.max(...messages.map((message) => message.createdAt));
+  const sourceCount = assistantMessages.reduce(
+    (total, message) => total + (message.sources?.length ?? 0),
+    0,
+  );
+
+  return {
+    id: sessionId,
+    title: firstUserMessage?.content || "新的知识库问答",
+    createdAt: messages[0]?.createdAt ?? Date.now(),
+    updatedAt,
+    turnCount: messages.filter((message) => message.role === "user").length,
+    sourceCount,
+    hasFeedback: assistantMessages.some((message) => Boolean(message.feedback)),
   };
 }

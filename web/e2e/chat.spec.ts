@@ -63,8 +63,13 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
   await page.getByRole("button", { name: "发送" }).click();
 
   await expect(page.getByText("请在开学前两周提交补考申请。[1]")).toBeVisible();
-  if (isMobile) {
-    await page.getByRole("button", { name: "引用" }).click();
+  if (!isMobile) {
+    await page.getByRole("button", { name: "回答有帮助" }).click();
+    await expect(page.getByText("反馈已记录")).toBeVisible();
   }
-  await expect(page.getByRole("heading", { name: "[1] 补考" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /挂科后什么时候申请补考/ })).toBeVisible();
+  if (isMobile) {
+    await page.getByRole("button", { name: "引用", exact: true }).click();
+  }
+  await expect(page.getByRole("heading", { name: "补考" })).toBeVisible();
 });

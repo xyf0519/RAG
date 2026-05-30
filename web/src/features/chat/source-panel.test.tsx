@@ -7,6 +7,7 @@ import { ChatWorkspace } from "./chat-workspace";
 
 describe("ChatWorkspace", () => {
   function seedSession(role: "admin" | "user") {
+    window.localStorage.clear();
     window.localStorage.setItem(
       "xyfrag.auth.v1",
       JSON.stringify({
@@ -18,6 +19,42 @@ describe("ChatWorkspace", () => {
         },
         issuedAt: Date.now(),
       }),
+    );
+  }
+
+  function seedChatHistory() {
+    const sessionId = "session-history";
+    window.localStorage.setItem("xyfrag.session.v1", sessionId);
+    window.localStorage.setItem(
+      `xyfrag.chat.v1.${sessionId}`,
+      JSON.stringify([
+        {
+          id: "user-history",
+          role: "user",
+          content: "校园卡挂失流程",
+          createdAt: Date.now() - 60_000,
+        },
+        {
+          id: "assistant-history",
+          role: "assistant",
+          content: "校园卡遗失后应及时挂失。",
+          createdAt: Date.now() - 55_000,
+        },
+      ]),
+    );
+    window.localStorage.setItem(
+      "xyfrag.sessions.v1",
+      JSON.stringify([
+        {
+          id: sessionId,
+          title: "校园卡挂失流程",
+          createdAt: Date.now() - 60_000,
+          updatedAt: Date.now() - 55_000,
+          turnCount: 1,
+          sourceCount: 0,
+          hasFeedback: false,
+        },
+      ]),
     );
   }
 
@@ -94,5 +131,35 @@ describe("ChatWorkspace", () => {
 
     expect(screen.queryByRole("button", { name: /知识库治理/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /质量分析/ })).not.toBeInTheDocument();
+  });
+
+  it("restores saved sessions from the history list", () => {
+    seedSession("admin");
+    seedChatHistory();
+
+    render(
+      <AuthProvider>
+        <ChatWorkspace />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /校园卡挂失流程/ }));
+
+    expect(screen.getByText("校园卡遗失后应及时挂失。")).toBeInTheDocument();
+  });
+
+  it("records answer feedback in the conversation", () => {
+    seedSession("admin");
+    seedChatHistory();
+
+    render(
+      <AuthProvider>
+        <ChatWorkspace />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "回答有帮助" }));
+
+    expect(screen.getByText("反馈已记录")).toBeInTheDocument();
   });
 });

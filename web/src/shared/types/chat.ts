@@ -58,6 +58,13 @@ export type ChatErrorPayload = {
   session_id?: string;
 };
 
+export type FeedbackRating = "up" | "down";
+
+export type ChatFeedback = {
+  rating: FeedbackRating;
+  createdAt: number;
+};
+
 export type ChatStreamEvent =
   | { type: "status"; payload: ChatStatusPayload }
   | { type: "delta"; payload: ChatDeltaPayload }
@@ -74,9 +81,21 @@ export type ChatMessage = {
   rewrittenQuery?: string;
   timings?: Timings;
   errorCode?: ErrorCode | null;
+  favorite?: boolean;
+  feedback?: ChatFeedback;
 };
 
 export type BackendHealth = {
   ok: boolean;
   app: string;
+};
+
+export type ChatSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  turnCount: number;
+  sourceCount: number;
+  hasFeedback: boolean;
 };
