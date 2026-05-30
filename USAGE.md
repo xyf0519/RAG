@@ -4,13 +4,13 @@
 
 ## 1. 环境准备
 
-后端需要 Python 3.9+，前端建议 Node 24 LTS。BGE 本地模型需要额外安装 `requirements-local-models.txt`。
+后端需要 Python 3.9+，前端建议 Node 24 LTS。BGE 本地模型需要两步：安装 `requirements-local-models.txt` 中的加载库，并另行下载模型权重到 `models/huggingface/`。
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-local-models.txt
+.venv/bin/python3 -m pip install --upgrade pip
+.venv/bin/python3 -m pip install -r requirements.txt
+.venv/bin/python3 -m pip install -r requirements-local-models.txt
 cp .env.example .env
 ```
 
@@ -23,7 +23,7 @@ OPENAI_BASE_URL=https://api.deepseek.com
 
 没有 API Key 时，默认 `llm.allow_mock_when_no_key: true` 会启用本地抽取式回答。
 
-BGE embedding/reranker 不走 OpenAI API，不需要在 `.env` 填 BGE API Key。当前默认配置从本地已下载模型加载：
+BGE embedding/reranker 不走 OpenAI API，不需要在 `.env` 填 BGE API Key。注意：`requirements-local-models.txt` 只安装加载库，不会下载模型权重。当前默认配置从本地模型目录加载：
 
 ```yaml
 retrieval:
@@ -35,14 +35,28 @@ retrieval:
   allow_model_fallback: true
 ```
 
-`bge-small-zh-v1.5` 适合 CPU 快速演示。如果学校网络不能直连 Hugging Face，可以选择其一：
+`bge-small-zh-v1.5` 适合 CPU 快速演示。先下载模型权重：
 
 ```bash
-HF_ENDPOINT=https://hf-mirror.com
-HF_TOKEN=你的 Hugging Face Token
+mkdir -p models/huggingface
+.venv/bin/huggingface-cli download BAAI/bge-small-zh-v1.5 \
+  --local-dir models/huggingface/bge-small-zh-v1.5 \
+  --local-dir-use-symlinks False
 ```
 
-或者提前下载模型，然后把 `config/settings.yaml` 改成本地路径：
+如果学校网络不能直连 Hugging Face，可以先设置镜像或 Token：
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_TOKEN=你的 Hugging Face Token
+.venv/bin/huggingface-cli download BAAI/bge-small-zh-v1.5 \
+  --local-dir models/huggingface/bge-small-zh-v1.5 \
+  --local-dir-use-symlinks False
+```
+
+不要直接运行裸 `huggingface-cli`。如果出现 `zsh: command not found: huggingface-cli`，使用 `.venv/bin/huggingface-cli`。
+
+或者从其他机器提前下载模型，然后把 `config/settings.yaml` 改成本地路径：
 
 ```yaml
 retrieval:
@@ -60,7 +74,7 @@ data/raw/
 当前支持 `.md` 和 `.txt`。更新知识库后重建索引：
 
 ```bash
-PYTHONPATH=src python scripts/build_index.py
+PYTHONPATH=src .venv/bin/python3 scripts/build_index.py
 ```
 
 边界分类器训练数据放在：
@@ -79,7 +93,7 @@ data/boundary/train.jsonl
 训练：
 
 ```bash
-PYTHONPATH=src python models/train_classifier.py
+PYTHONPATH=src .venv/bin/python3 models/train_classifier.py
 ```
 
 如果 `data/boundary/train.jsonl` 不存在，脚本会 fallback 到内置 mock 数据。
@@ -87,7 +101,7 @@ PYTHONPATH=src python models/train_classifier.py
 ## 3. 启动后端
 
 ```bash
-PYTHONPATH=src uvicorn app.main:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src .venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 健康检查：
@@ -165,7 +179,7 @@ OUT_OF_SCOPE
 后端：
 
 ```bash
-PYTHONPATH=src pytest
+PYTHONPATH=src .venv/bin/python3 -m pytest
 ```
 
 前端：
@@ -224,7 +238,7 @@ retrieval:
 需要重新构建索引：
 
 ```bash
-PYTHONPATH=src python scripts/build_index.py
+PYTHONPATH=src .venv/bin/python3 scripts/build_index.py
 ```
 
 ### Next.js 显示后端离线怎么办？

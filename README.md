@@ -37,17 +37,37 @@
 
 ## 快速启动
 
+第一次拉取项目、配置 API、本地 BGE 模型、边界二分类器和知识库扩充，请先看 [新手启动与扩展指南](docs/NEW_USER_GUIDE.md)。
+
 后端：
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-local-models.txt
+.venv/bin/python3 -m pip install --upgrade pip
+.venv/bin/python3 -m pip install -r requirements.txt
+.venv/bin/python3 -m pip install -r requirements-local-models.txt
 cp .env.example .env
-PYTHONPATH=src python models/train_classifier.py
-PYTHONPATH=src python scripts/build_index.py
-PYTHONPATH=src uvicorn app.main:app --host 127.0.0.1 --port 8000
+mkdir -p models/huggingface
+.venv/bin/huggingface-cli download BAAI/bge-small-zh-v1.5 \
+  --local-dir models/huggingface/bge-small-zh-v1.5 \
+  --local-dir-use-symlinks False
+PYTHONPATH=src .venv/bin/python3 models/train_classifier.py
+PYTHONPATH=src .venv/bin/python3 scripts/build_index.py
+PYTHONPATH=src .venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+如果下载模型时报 `zsh: command not found: huggingface-cli`，说明你执行了裸命令。请使用项目虚拟环境里的脚本：
+
+```bash
+.venv/bin/huggingface-cli download BAAI/bge-small-zh-v1.5 \
+  --local-dir models/huggingface/bge-small-zh-v1.5 \
+  --local-dir-use-symlinks False
+```
+
+如果 `.venv/bin/huggingface-cli` 也不存在，先重新安装基础依赖：
+
+```bash
+.venv/bin/python3 -m pip install -r requirements.txt
 ```
 
 LLM API Key 填在项目根目录 `.env`：
@@ -57,7 +77,7 @@ OPENAI_API_KEY=你的 API Key
 OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
-BGE 模型不需要填写 API Key；当前默认使用本地 `models/huggingface/bge-small-zh-v1.5`。若要换更大的模型，可下载到本地后在 `config/settings.yaml` 中把 `embedding_model` 改成本地路径，并按需把 `reranker_backend` 改成 `bge`。
+BGE 模型不需要填写 API Key，但需要两步：先安装 `requirements-local-models.txt` 中的加载库，再用 `.venv/bin/huggingface-cli` 下载模型权重到 `models/huggingface/bge-small-zh-v1.5`。若要换更大的模型，可下载到本地后在 `config/settings.yaml` 中把 `embedding_model` 改成本地路径，并按需把 `reranker_backend` 改成 `bge`。
 
 前端：
 
@@ -78,7 +98,7 @@ FastAPI  http://127.0.0.1:8000
 Gradio 仍保留为调试入口：
 
 ```bash
-PYTHONPATH=src python frontend.py
+PYTHONPATH=src .venv/bin/python3 frontend.py
 ```
 
 ## 流式 API
@@ -100,7 +120,7 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
 ## 测试与质量门槛
 
 ```bash
-PYTHONPATH=src pytest
+PYTHONPATH=src .venv/bin/python3 -m pytest
 cd web
 npm run lint
 npm run typecheck
