@@ -62,6 +62,19 @@ class IndexJobRecord:
     finished_at: float | None
 
 
+@dataclass(frozen=True)
+class BoundaryDatasetItemRecord:
+    """Boundary sample metadata for one knowledge base."""
+
+    id: str
+    knowledge_base_id: str
+    text: str
+    label: int
+    source: str
+    status: str
+    created_at: float
+
+
 class KnowledgeBaseStore:
     """SQLite metadata store plus filesystem layout for local operations."""
 
@@ -399,6 +412,134 @@ class KnowledgeBaseStore:
             ).fetchone()
         return self._job_from_row(row) if row else None
 
+    def list_boundary_items(
+        self,
+        knowledge_base_id: str,
+    ) -> list[BoundaryDatasetItemRecord]:
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM boundary_items
+                WHERE knowledge_base_id = ?
+                ORDER BY created_at DESC
+                """,
+                (knowledge_base_id,),
+            ).fetchall()
+        return [self._boundary_item_from_row(row) for row in rows]
+
+    def add_boundary_item(
+        self,
+        knowledge_base_id: str,
+        text: str,
+        label: int,
+        source: str = "manual",
+        status: str = "approved",
+    ) -> BoundaryDatasetItemRecord:
+        self.require_knowledge_base(knowledge_base_id)
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise ValueError("样本文本不能为空。")
+        if label not in {0, 1}:
+            raise ValueError("样本标签不正确。")
+        if source not in {"manual", "llm"}:
+            raise ValueError("样本来源不正确。")
+
+        now = time.time()
+        item_id = f"boundary-{knowledge_base_id}-{uuid4().hex[:12]}"
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO boundary_items (
+                    id, knowledge_base_id, text, label, source, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    knowledge_base_id,
+                    normalized_text,
+                    label,
+                    source,
+                    status,
+                    now,
+                ),
+            )
+        return BoundaryDatasetItemRecord(
+            id=item_id,
+            knowledge_base_id=knowledge_base_id,
+            text=normalized_text,
+            label=label,
+            source=source,
+            status=status,
+            created_at=now,
+        )
+
+    def delete_boundary_item(
+        self,
+        knowledge_base_id: str,
+        item_id: str,
+    ) -> None:
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM boundary_items
+                WHERE knowledge_base_id = ? AND id = ?
+                """,
+                (knowledge_base_id, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Boundary item not found: {item_id}")
+
+    def update_boundary_item(
+        self,
+        knowledge_base_id: str,
+        item_id: str,
+        text: str,
+        label: int,
+        status: str = "approved",
+    ) -> BoundaryDatasetItemRecord:
+        self.require_knowledge_base(knowledge_base_id)
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise ValueError("样本文本不能为空。")
+        if label not in {0, 1}:
+            raise ValueError("样本标签不正确。")
+        if status not in {"draft", "approved"}:
+            raise ValueError("样本状态不正确。")
+
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE boundary_items
+                SET text = ?, label = ?, status = ?
+                WHERE knowledge_base_id = ? AND id = ?
+                """,
+                (normalized_text, label, status, knowledge_base_id, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Boundary item not found: {item_id}")
+            row = connection.execute(
+                """
+                SELECT * FROM boundary_items
+                WHERE knowledge_base_id = ? AND id = ?
+                """,
+                (knowledge_base_id, item_id),
+            ).fetchone()
+        return self._boundary_item_from_row(row)
+
+    def sample_knowledge_text(self, knowledge_base_id: str, limit: int = 4000) -> str:
+        self.require_knowledge_base(knowledge_base_id)
+        snippets: list[str] = []
+        for path in sorted(self.raw_dir(knowledge_base_id).glob("*")):
+            if not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+                continue
+            snippets.append(path.read_text(encoding="utf-8", errors="ignore")[:limit])
+            if sum(len(snippet) for snippet in snippets) >= limit:
+                break
+        return "\n\n".join(snippets)[:limit]
+
     def load_index(self, knowledge_base_id: str) -> KnowledgeIndex:
         return KnowledgeIndex.load(self.index_dir(knowledge_base_id))
 
@@ -459,6 +600,18 @@ class KnowledgeBaseStore:
             message=str(row["message"]),
             created_at=float(row["created_at"]),
             finished_at=row["finished_at"],
+        )
+
+    @staticmethod
+    def _boundary_item_from_row(row: sqlite3.Row) -> BoundaryDatasetItemRecord:
+        return BoundaryDatasetItemRecord(
+            id=str(row["id"]),
+            knowledge_base_id=str(row["knowledge_base_id"]),
+            text=str(row["text"]),
+            label=int(row["label"]),
+            source=str(row["source"]),
+            status=str(row["status"]),
+            created_at=float(row["created_at"]),
         )
 
     def _create_layout(self, knowledge_base_id: str) -> None:

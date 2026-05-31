@@ -56,6 +56,32 @@ def test_store_crud_upload_and_index_job(tmp_path: Path) -> None:
     assert store.settings_for(knowledge_base.id).paths.raw_docs_dir == store.raw_dir(knowledge_base.id)
 
 
+def test_store_boundary_items_crud(tmp_path: Path) -> None:
+    store = KnowledgeBaseStore(make_settings(tmp_path))
+    knowledge_base = store.create_knowledge_base("边界样本库", "边界训练")
+
+    created = store.add_boundary_item(
+        knowledge_base.id,
+        "校园卡丢了怎么办？",
+        1,
+    )
+    assert created.label == 1
+    assert store.list_boundary_items(knowledge_base.id)[0].id == created.id
+
+    updated = store.update_boundary_item(
+        knowledge_base.id,
+        created.id,
+        "请推荐附近餐厅。",
+        0,
+        status="approved",
+    )
+    assert updated.text == "请推荐附近餐厅。"
+    assert updated.label == 0
+
+    store.delete_boundary_item(knowledge_base.id, created.id)
+    assert store.list_boundary_items(knowledge_base.id) == []
+
+
 def test_store_rejects_unsupported_or_empty_documents(tmp_path: Path) -> None:
     store = KnowledgeBaseStore(make_settings(tmp_path))
     knowledge_base = store.create_knowledge_base("规章制度")

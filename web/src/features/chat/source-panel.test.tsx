@@ -42,6 +42,19 @@ describe("ChatWorkspace", () => {
             },
           ]);
         }
+        if (url.includes("/boundary-items")) {
+          return jsonResponse([
+            {
+              id: "sample-1",
+              knowledge_base_id: "kb-default",
+              text: "校园卡丢了怎么办？",
+              label: 1,
+              source: "manual",
+              status: "approved",
+              created_at: Date.now() / 1000,
+            },
+          ]);
+        }
         return jsonResponse({});
       }),
     );
@@ -124,7 +137,7 @@ describe("ChatWorkspace", () => {
     expect(screen.getByText("挂科后什么时候申请补考？")).toBeInTheDocument();
   });
 
-  it("opens the admin knowledge governance workspace", () => {
+  it("opens the admin knowledge add workspace", () => {
     seedSession("admin");
 
     render(
@@ -133,12 +146,27 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /知识库治理/ }));
+    fireEvent.click(screen.getByRole("button", { name: /添加知识库/ }));
 
-    expect(screen.getByRole("heading", { name: "知识库治理中心" })).toBeInTheDocument();
-    expect(screen.getByText("知识库列表")).toBeInTheDocument();
-    expect(screen.getByText("拖拽文档到这里，或点击上传")).toBeInTheDocument();
-    expect(screen.getByText("熔断器训练台")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "添加知识库" })).toBeInTheDocument();
+    expect(screen.getByText("拖拽或点击上传")).toBeInTheDocument();
+    expect(screen.getAllByText("默认校园资料库").length).toBeGreaterThan(0);
+  });
+
+  it("opens the boundary training workspace", async () => {
+    seedSession("admin");
+
+    render(
+      <AuthProvider>
+        <ChatWorkspace />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /边界训练/ }));
+
+    expect(await screen.findByRole("heading", { name: "边界训练" })).toBeInTheDocument();
+    expect(screen.getByText("手动添加")).toBeInTheDocument();
+    expect(screen.getByText("智能扩充")).toBeInTheDocument();
   });
 
   it("opens the admin quality analytics workspace", () => {
@@ -181,7 +209,8 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    expect(screen.queryByRole("button", { name: /知识库治理/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /添加知识库/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /边界训练/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /质量分析/ })).not.toBeInTheDocument();
   });
 

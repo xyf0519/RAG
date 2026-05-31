@@ -90,6 +90,43 @@ def test_knowledge_base_management_endpoints() -> None:
         assert file_response.json()[0]["filename"] == "guide.md"
 
 
+def test_boundary_item_endpoints() -> None:
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/v1/knowledge-bases/kb-default/boundary-items",
+            json={"text": "校园卡丢了怎么办？", "label": 1},
+        )
+        assert create_response.status_code == 200
+        created = create_response.json()
+        assert created["status"] == "approved"
+
+        update_response = client.patch(
+            f"/api/v1/knowledge-bases/kb-default/boundary-items/{created['id']}",
+            json={"text": "请推荐附近餐厅。", "label": 0, "status": "approved"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["label"] == 0
+
+        generate_response = client.post(
+            "/api/v1/knowledge-bases/kb-default/boundary-items/generate",
+            json={"count": 4, "label_hint": "校园卡"},
+        )
+        assert generate_response.status_code == 200
+        generated = generate_response.json()
+        assert len(generated) == 4
+        assert {item["source"] for item in generated} == {"llm"}
+
+        list_response = client.get("/api/v1/knowledge-bases/kb-default/boundary-items")
+        assert list_response.status_code == 200
+        assert len(list_response.json()) >= 5
+
+        delete_response = client.delete(
+            f"/api/v1/knowledge-bases/kb-default/boundary-items/{created['id']}",
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["ok"] is True
+
+
 def test_chat_unknown_knowledge_base_returns_404() -> None:
     with TestClient(app) as client:
         response = client.post(

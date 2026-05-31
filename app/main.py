@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from typing import Any, Optional, Union
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from xyfrag.config import get_settings
 from xyfrag.knowledge_base import (
+    BoundaryDatasetItemRecord,
     DEFAULT_KNOWLEDGE_BASE_ID,
     IndexJobRecord,
     KnowledgeBaseRecord,
@@ -22,6 +24,7 @@ from xyfrag.knowledge_base import (
     KnowledgeDocumentRecord,
 )
 from xyfrag.logging_config import configure_logging
+from xyfrag.llm import LLMClientError, OpenAICompatibleClient
 from xyfrag.service import RAGService
 from xyfrag.session import InMemorySessionStore
 
@@ -132,6 +135,32 @@ class IndexJobResponse(BaseModel):
     message: str
     created_at: float
     finished_at: Optional[float] = None
+
+
+class BoundaryDatasetItemCreateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    label: int = Field(ge=0, le=1)
+
+
+class BoundaryDatasetItemUpdateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    label: int = Field(ge=0, le=1)
+    status: Optional[str] = None
+
+
+class BoundaryDatasetGenerateRequest(BaseModel):
+    count: int = Field(default=8, ge=1, le=30)
+    label_hint: str = Field(default="", max_length=300)
+
+
+class BoundaryDatasetItemResponse(BaseModel):
+    id: str
+    knowledge_base_id: str
+    text: str
+    label: int
+    source: str
+    status: str
+    created_at: float
 
 
 def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
@@ -454,6 +483,114 @@ async def get_job(job_id: str) -> IndexJobResponse:
     return _job_response(job)
 
 
+@app.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items",
+    response_model=list[BoundaryDatasetItemResponse],
+)
+async def list_boundary_items(knowledge_base_id: str) -> list[BoundaryDatasetItemResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        return [_boundary_item_response(item) for item in store.list_boundary_items(knowledge_base_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+
+
+@app.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items",
+    response_model=BoundaryDatasetItemResponse,
+)
+async def create_boundary_item(
+    knowledge_base_id: str,
+    request: BoundaryDatasetItemCreateRequest,
+) -> BoundaryDatasetItemResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        item = store.add_boundary_item(
+            knowledge_base_id,
+            text=request.text,
+            label=request.label,
+            source="manual",
+            status="approved",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _boundary_item_response(item)
+
+
+@app.patch(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items/{item_id}",
+    response_model=BoundaryDatasetItemResponse,
+)
+async def update_boundary_item(
+    knowledge_base_id: str,
+    item_id: str,
+    request: BoundaryDatasetItemUpdateRequest,
+) -> BoundaryDatasetItemResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        item = store.update_boundary_item(
+            knowledge_base_id,
+            item_id,
+            text=request.text,
+            label=request.label,
+            status=request.status or "approved",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="样本不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _boundary_item_response(item)
+
+
+@app.delete(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items/{item_id}",
+    response_model=dict[str, bool],
+)
+async def delete_boundary_item(knowledge_base_id: str, item_id: str) -> dict[str, bool]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        store.delete_boundary_item(knowledge_base_id, item_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="样本不存在。") from exc
+    return {"ok": True}
+
+
+@app.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items/generate",
+    response_model=list[BoundaryDatasetItemResponse],
+)
+async def generate_boundary_items(
+    knowledge_base_id: str,
+    request: BoundaryDatasetGenerateRequest,
+) -> list[BoundaryDatasetItemResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        knowledge_base = store.require_knowledge_base(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+
+    knowledge_text = store.sample_knowledge_text(knowledge_base.id, limit=3600)
+    samples = await _generate_boundary_sample_candidates(
+        knowledge_base.name,
+        knowledge_text,
+        request.count,
+        request.label_hint,
+    )
+    items = [
+        store.add_boundary_item(
+            knowledge_base.id,
+            text=sample["text"],
+            label=sample["label"],
+            source="llm",
+            status="draft",
+        )
+        for sample in samples
+    ]
+    return [_boundary_item_response(item) for item in items]
+
+
 @app.delete("/sessions/{session_id}", response_model=dict[str, bool])
 async def clear_session(session_id: str) -> dict[str, bool]:
     """Clear one chat session.
@@ -480,3 +617,110 @@ def _document_response(record: KnowledgeDocumentRecord) -> KnowledgeDocumentResp
 
 def _job_response(record: IndexJobRecord) -> IndexJobResponse:
     return IndexJobResponse(**record.__dict__)
+
+
+def _boundary_item_response(
+    record: BoundaryDatasetItemRecord,
+) -> BoundaryDatasetItemResponse:
+    return BoundaryDatasetItemResponse(**record.__dict__)
+
+
+async def _generate_boundary_sample_candidates(
+    knowledge_base_name: str,
+    knowledge_text: str,
+    count: int,
+    label_hint: str,
+) -> list[dict[str, int | str]]:
+    settings = get_settings()
+    prompt = f"""
+请为知识库「{knowledge_base_name}」生成二分类边界训练样本。
+数量：{count}
+标签含义：1 表示知识库范围内，0 表示知识库范围外。
+类别提示：{label_hint or "兼顾范围内与范围外问题"}
+知识库摘要：
+{knowledge_text[:3200] or "暂无资料摘要"}
+
+只返回 JSON 数组。每项格式为 {{"text":"用户可能提出的问题","label":1}}。
+""".strip()
+    try:
+        response = await OpenAICompatibleClient(settings.llm).chat(
+            [
+                {
+                    "role": "system",
+                    "content": "你是知识库边界训练样本生成助手，只输出 JSON。",
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+        parsed = _parse_boundary_samples(response.content, count)
+        if parsed:
+            return parsed
+    except LLMClientError:
+        pass
+
+    return _fallback_boundary_samples(knowledge_base_name, count, label_hint, knowledge_text)
+
+
+def _parse_boundary_samples(content: str, count: int) -> list[dict[str, int | str]]:
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\[[\s\S]*\]", content)
+        if not match:
+            return []
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(data, list):
+        return []
+    samples: list[dict[str, int | str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        label = item.get("label")
+        if text and label in {0, 1}:
+            samples.append({"text": text[:1000], "label": int(label)})
+        if len(samples) >= count:
+            break
+    return samples
+
+
+def _fallback_boundary_samples(
+    knowledge_base_name: str,
+    count: int,
+    label_hint: str,
+    knowledge_text: str,
+) -> list[dict[str, int | str]]:
+    positive_seed = [
+        f"{knowledge_base_name}相关流程如何办理？",
+        f"{knowledge_base_name}里的资料适用于哪些场景？",
+        "资料中提到的申请条件是什么？",
+        "如果相关证件遗失应该怎么处理？",
+        "办理这项业务需要联系哪个部门？",
+    ]
+    negative_seed = [
+        "帮我写一首诗。",
+        "今天股票应该怎么买？",
+        "推荐附近最好吃的餐厅。",
+        "给我生成一段游戏剧情。",
+        "解释一个和本知识库无关的娱乐新闻。",
+    ]
+    if label_hint:
+        positive_seed.insert(0, f"{label_hint} 的范围内问题应该如何处理？")
+        negative_seed.insert(0, f"请评价一款和 {label_hint} 无关的消费电子产品。")
+    if knowledge_text:
+        title = next(
+            (line.lstrip("#").strip() for line in knowledge_text.splitlines() if line.strip().startswith("#")),
+            knowledge_base_name,
+        )
+        positive_seed.insert(0, f"{title} 的核心规定是什么？")
+
+    samples: list[dict[str, int | str]] = []
+    for index in range(count):
+        if index % 2 == 0:
+            samples.append({"text": positive_seed[(index // 2) % len(positive_seed)], "label": 1})
+        else:
+            samples.append({"text": negative_seed[(index // 2) % len(negative_seed)], "label": 0})
+    return samples

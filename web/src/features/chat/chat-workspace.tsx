@@ -12,6 +12,7 @@ import {
   Clock3,
   Copy,
   Database,
+  FilePlus2,
   FileCheck2,
   FileText,
   HelpCircle,
@@ -38,6 +39,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -53,6 +55,7 @@ import type {
   ChatSessionSummary,
   ChatStatusPayload,
   FeedbackRating,
+  BoundaryDatasetItem,
   IndexJob,
   KnowledgeBase,
   KnowledgeDocument,
@@ -82,7 +85,7 @@ const EXAMPLES = [
   },
 ];
 
-type WorkspaceView = "chat" | "knowledge" | "quality";
+type WorkspaceView = "chat" | "knowledge" | "boundary" | "quality";
 
 const NAV_ITEMS: Array<{
   id: WorkspaceView;
@@ -92,14 +95,9 @@ const NAV_ITEMS: Array<{
   adminOnly?: boolean;
 }> = [
   { id: "chat", label: "问答工作台", icon: MessageSquareText },
-  { id: "knowledge", label: "知识库治理", icon: Database, badge: "管理", adminOnly: true },
+  { id: "knowledge", label: "添加知识库", icon: FilePlus2, adminOnly: true },
+  { id: "boundary", label: "边界训练", icon: BrainCircuit, adminOnly: true },
   { id: "quality", label: "质量分析", icon: BarChart3, badge: "治理", adminOnly: true },
-];
-
-const GOVERNANCE_CHECKS = [
-  { label: "引用片段可追溯", value: "已启用" },
-  { label: "越界问题拦截", value: "已启用" },
-  { label: "知识源版本记录", value: "已启用" },
 ];
 
 const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
@@ -113,6 +111,9 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
   updated_at: Date.now() / 1000,
   created_at: Date.now() / 1000,
 };
+
+const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
+const BOUNDARY_VISUAL_SRC = "/images/boundary-network-visual.png";
 
 const QUALITY_REVIEWS = [
   {
@@ -371,12 +372,19 @@ export function ChatWorkspace() {
           />
 
           {workspaceView === "knowledge" && auth.isAdmin ? (
-            <KnowledgeAdminWorkspace
+            <KnowledgeAddWorkspace
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedKnowledgeBase.id}
               notice={knowledgeNotice}
               onNotice={setKnowledgeNotice}
               onRefresh={refreshKnowledgeBases}
+              onSelect={setSelectedKnowledgeBaseId}
+            />
+          ) : null}
+          {workspaceView === "boundary" && auth.isAdmin ? (
+            <BoundaryTrainingWorkspace
+              knowledgeBases={knowledgeBases}
+              selectedKnowledgeBaseId={selectedKnowledgeBase.id}
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
@@ -553,7 +561,7 @@ function ChatWorkspaceView({
   );
 }
 
-function KnowledgeAdminWorkspace({
+function KnowledgeAddWorkspace({
   knowledgeBases,
   selectedKnowledgeBaseId,
   notice,
@@ -578,6 +586,8 @@ function KnowledgeAdminWorkspace({
   const [savingStatus, setSavingStatus] = useState(false);
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
+  const visibleKnowledgeBases = knowledgeBases.slice(0, 5);
+  const visibleDocuments = documents.slice(0, 4);
 
   const refreshDocuments = useCallback(async () => {
     if (!selectedKnowledgeBase?.id) {
@@ -619,7 +629,7 @@ function KnowledgeAdminWorkspace({
       setNewName("");
       setNewDescription("");
       onSelect(created.id);
-      onNotice("知识库已创建，可上传资料并构建索引。");
+      onNotice("知识库已创建。");
       await onRefresh();
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "知识库创建失败。");
@@ -645,7 +655,7 @@ function KnowledgeAdminWorkspace({
       if (!response.ok) {
         throw new Error(await readResponseError(response, "文档上传失败。"));
       }
-      onNotice(`${nextFiles.length} 个文档已上传，等待构建索引。`);
+      onNotice(`${nextFiles.length} 个文档已上传。`);
       await onRefresh();
       await refreshDocuments();
     } catch (error) {
@@ -657,7 +667,7 @@ function KnowledgeAdminWorkspace({
 
   async function runIndexing() {
     setIndexing(true);
-    onNotice("正在构建知识索引。");
+    onNotice("正在构建索引。");
     try {
       const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/index-jobs`, {
         method: "POST",
@@ -686,120 +696,110 @@ function KnowledgeAdminWorkspace({
         body: JSON.stringify({ status: nextStatus }),
       });
       if (!response.ok) {
-        throw new Error(await readResponseError(response, "知识库状态更新失败。"));
+        throw new Error(await readResponseError(response, "状态更新失败。"));
       }
       onNotice(nextStatus === "active" ? "知识库已启用。" : "知识库已停用。");
       await onRefresh();
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "知识库状态更新失败。");
+      onNotice(error instanceof Error ? error.message : "状态更新失败。");
     } finally {
       setSavingStatus(false);
     }
   }
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid max-w-[1440px] gap-4 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)_360px]">
-        <div className="space-y-4">
-          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f5faf8_100%)] p-5 shadow-[var(--shadow-panel)]">
-            <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
-              <Database size={14} aria-hidden="true" />
-              Knowledge Governance
-            </div>
-            <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">知识库治理中心</h1>
-            <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-              面向管理员的多知识库运维台，支持资料入库、索引构建与熔断器样本治理。
-            </p>
-            <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <AdminMetric icon={Database} label="知识库" value={`${knowledgeBases.length}`} />
-              <AdminMetric icon={FileText} label="当前文档" value={`${selectedKnowledgeBase.document_count}`} />
-              <AdminMetric icon={CheckCircle2} label="索引状态" value={indexStatusLabel(selectedKnowledgeBase.index_status)} />
-            </div>
-          </div>
-
-          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">知识库列表</h2>
-              <p className="text-xs text-[var(--muted)]">选择当前问答与治理对象</p>
+    <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
+      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_320px]">
+        <div className="grid min-h-0 grid-rows-[176px_minmax(0,1fr)] gap-4">
+          <VisualHero
+            image={KNOWLEDGE_VISUAL_SRC}
+            eyebrow="Knowledge"
+            title="添加知识库"
+            description="创建资料空间，上传文档并构建索引。"
+          />
+          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="shrink-0">
+              <h2 className="text-sm font-semibold">知识库</h2>
+              <p className="text-xs text-[var(--muted)]">{knowledgeBases.length} 个空间</p>
             </CardHeader>
-            <CardContent>
+            <CardContent className="min-h-0 overflow-hidden">
               <div className="space-y-2">
-                {knowledgeBases.map((knowledgeBase) => (
+                {visibleKnowledgeBases.map((knowledgeBase) => (
                   <button
                     key={knowledgeBase.id}
                     type="button"
                     onClick={() => onSelect(knowledgeBase.id)}
                     className={cn(
-                      "w-full rounded-lg border bg-white px-3 py-3 text-left shadow-sm transition hover:border-[var(--accent)] hover:shadow-md",
+                      "w-full rounded-xl border bg-white px-3 py-3 text-left shadow-sm transition hover:border-[var(--accent)] hover:shadow-md",
                       knowledgeBase.id === selectedKnowledgeBase.id ? "border-[var(--accent)]" : "border-[var(--border)]",
                     )}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{knowledgeBase.name}</p>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
-                          {knowledgeBase.description || "暂无描述"}
+                        <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                          {knowledgeBase.document_count} 文档
                         </p>
                       </div>
-                      <StatusChip label={indexStatusLabel(knowledgeBase.index_status)} tone={knowledgeBase.index_status === "ready" ? "ok" : "muted"} />
+                      <StatusChip
+                        label={indexStatusLabel(knowledgeBase.index_status)}
+                        tone={knowledgeBase.index_status === "ready" ? "ok" : "muted"}
+                      />
                     </div>
-                    <p className="mt-2 text-xs text-[var(--muted)]">{knowledgeBase.document_count} 个文档</p>
                   </button>
                 ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">新建知识库</h2>
-              <p className="text-xs text-[var(--muted)]">先创建空间，再上传资料并构建索引</p>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <input
-                  value={newName}
-                  onChange={(event) => setNewName(event.target.value)}
-                  placeholder="知识库名称"
-                  className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
-                />
-                <textarea
-                  value={newDescription}
-                  onChange={(event) => setNewDescription(event.target.value)}
-                  placeholder="用途描述"
-                  rows={3}
-                  className="w-full resize-none rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                />
-                <Button type="button" variant="primary" className="w-full justify-center" onClick={createKnowledgeBase}>
-                  <Plus size={15} aria-hidden="true" />
-                  创建知识库
-                </Button>
+                {knowledgeBases.length > visibleKnowledgeBases.length ? (
+                  <p className="px-1 text-xs text-[var(--muted)]">
+                    还有 {knowledgeBases.length - visibleKnowledgeBases.length} 个知识库
+                  </p>
+                ) : null}
               </div>
             </CardContent>
           </Card>
         </div>
 
-        <div className="space-y-4">
-          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h2 className="text-sm font-semibold">{selectedKnowledgeBase.name}</h2>
-                  <p className="text-xs text-[var(--muted)]">{notice}</p>
+        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardContent className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
+              <input
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+                placeholder="知识库名称"
+                className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
+              />
+              <input
+                value={newDescription}
+                onChange={(event) => setNewDescription(event.target.value)}
+                placeholder="一句话描述"
+                className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
+              />
+              <Button type="button" variant="primary" onClick={createKnowledgeBase}>
+                <Plus size={15} aria-hidden="true" />
+                新建
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="shrink-0">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold">{selectedKnowledgeBase.name}</h2>
+                  <p className="truncate text-xs text-[var(--muted)]">{notice}</p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex shrink-0 gap-2">
                   <Button type="button" variant="secondary" size="sm" onClick={() => void onRefresh()}>
                     <RefreshCw size={14} aria-hidden="true" />
                     刷新
                   </Button>
                   <Button type="button" variant="primary" size="sm" onClick={runIndexing} disabled={indexing || !documents.length}>
                     {indexing ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
-                    构建索引
+                    构建
                   </Button>
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="grid min-h-0 grid-rows-[210px_minmax(0,1fr)] gap-3">
               <div
                 onDragOver={(event) => event.preventDefault()}
                 onDragEnter={(event) => {
@@ -813,104 +813,451 @@ function KnowledgeAdminWorkspace({
                   void onFiles(Array.from(event.dataTransfer.files));
                 }}
                 className={cn(
-                  "rounded-xl border border-dashed bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] p-6 text-center transition hover:border-[var(--accent)]",
+                  "grid place-items-center rounded-2xl border border-dashed bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] text-center transition hover:border-[var(--accent)]",
                   dragging ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(0,108,99,0.12)]" : "border-[var(--border-strong)]",
                 )}
               >
-                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--accent-tint)] text-[var(--accent-strong)]">
-                  {uploading ? <Loader2 className="animate-spin" size={20} /> : <UploadCloud size={20} />}
-                </div>
-                <p className="text-sm font-semibold">拖拽文档到这里，或点击上传</p>
-                <p className="mt-2 text-xs text-[var(--muted)]">支持 Markdown / TXT，多文件上传后可统一构建索引。</p>
-                <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => fileInputRef.current?.click()}>
-                  选择文档
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept=".md,.txt"
-                  className="sr-only"
-                  onChange={(event) => {
-                    void onFiles(event.target.files);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {documents.length ? documents.map((document) => (
-                  <div key={document.id} className="rounded-lg border border-[var(--border)] bg-white px-3 py-3 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{document.title}</p>
-                        <p className="mt-1 text-xs text-[var(--muted)]">
-                          {document.filename} · {formatFileSize(document.size)}
-                        </p>
-                      </div>
-                      <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
-                    </div>
+                <div>
+                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+                    {uploading ? <Loader2 className="animate-spin" size={21} /> : <UploadCloud size={21} />}
                   </div>
-                )) : (
-                  <PanelEmpty icon={UploadCloud} title="等待上传资料" description="上传文档后可构建当前知识库的独立索引。" />
-                )}
+                  <p className="text-sm font-semibold">拖拽或点击上传</p>
+                  <p className="mt-2 text-xs text-[var(--muted)]">Markdown / TXT</p>
+                  <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => fileInputRef.current?.click()}>
+                    选择文档
+                  </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept=".md,.txt"
+                    className="sr-only"
+                    onChange={(event) => {
+                      void onFiles(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">熔断器训练台</h2>
-              <p className="text-xs text-[var(--muted)]">管理训练样本、候选审核与每库独立应用</p>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 md:grid-cols-3">
-                <GovernanceStep icon={PenLine} title="添加条目" description="录入范围内/范围外样本。" />
-                <GovernanceStep icon={Sparkles} title="智能扩充" description="候选样本先进入审核队列。" />
-                <GovernanceStep icon={BrainCircuit} title="训练应用" description="每个知识库独立生效。" />
+              <div className="min-h-0 overflow-hidden pr-1">
+                <div className="space-y-2">
+                  {documents.length ? visibleDocuments.map((document) => (
+                    <CompactDocumentRow key={document.id} document={document} />
+                  )) : (
+                    <PanelEmpty icon={UploadCloud} title="等待资料" description="上传后即可构建索引。" />
+                  )}
+                  {documents.length > visibleDocuments.length ? (
+                    <p className="px-1 text-xs text-[var(--muted)]">
+                      还有 {documents.length - visibleDocuments.length} 个文档
+                    </p>
+                  ) : null}
+                </div>
               </div>
             </CardContent>
           </Card>
         </div>
 
-        <aside className="space-y-4">
+        <aside className="grid min-h-0 content-start gap-4">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardHeader>
-              <h2 className="text-sm font-semibold">当前状态</h2>
-              <p className="text-xs text-[var(--muted)]">{selectedKnowledgeBase.description || "知识库运维状态"}</p>
+              <h2 className="text-sm font-semibold">状态</h2>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                <StateRow label="运行状态" value={selectedKnowledgeBase.status === "active" ? "启用" : "停用"} />
-                <StateRow label="索引状态" value={indexStatusLabel(selectedKnowledgeBase.index_status)} />
-                <StateRow label="文档数量" value={`${selectedKnowledgeBase.document_count}`} />
-                <StateRow label="最近更新" value={formatTimestamp(selectedKnowledgeBase.updated_at)} />
+                <StateRow label="运行" value={selectedKnowledgeBase.status === "active" ? "启用" : "停用"} />
+                <StateRow label="索引" value={indexStatusLabel(selectedKnowledgeBase.index_status)} />
+                <StateRow label="文档" value={`${selectedKnowledgeBase.document_count}`} />
               </div>
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="mt-4 w-full justify-center"
+                className="mt-3 w-full justify-center"
                 onClick={toggleKnowledgeBaseStatus}
                 disabled={savingStatus}
               >
                 {savingStatus ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
-                {selectedKnowledgeBase.status === "active" ? "停用知识库" : "启用知识库"}
+                {selectedKnowledgeBase.status === "active" ? "停用" : "启用"}
               </Button>
             </CardContent>
           </Card>
 
           <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">治理检查</h2>
-              <p className="text-xs text-[var(--muted)]">系统能力状态</p>
+            <CardContent className="p-4">
+              <Image
+                src={KNOWLEDGE_VISUAL_SRC}
+                alt="知识库视觉"
+                width={480}
+                height={180}
+                className="h-32 w-full rounded-xl object-cover"
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="shrink-0">
+              <h2 className="text-sm font-semibold">最近更新</h2>
             </CardHeader>
             <CardContent>
-              <div className="space-y-2">
-                {GOVERNANCE_CHECKS.map((check) => (
-                  <StateRow key={check.label} label={check.label} value={check.value} />
+              <StateRow label="时间" value={formatTimestamp(selectedKnowledgeBase.updated_at)} />
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function BoundaryTrainingWorkspace({
+  knowledgeBases,
+  selectedKnowledgeBaseId,
+  onSelect,
+}: {
+  knowledgeBases: KnowledgeBase[];
+  selectedKnowledgeBaseId: string;
+  onSelect: (knowledgeBaseId: string) => void;
+}) {
+  const selectedKnowledgeBase =
+    knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
+  const [items, setItems] = useState<BoundaryDatasetItem[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [manualText, setManualText] = useState("");
+  const [manualLabel, setManualLabel] = useState<0 | 1>(1);
+  const [editText, setEditText] = useState("");
+  const [editLabel, setEditLabel] = useState<0 | 1>(1);
+  const [aiCount, setAiCount] = useState(8);
+  const [aiHint, setAiHint] = useState("");
+  const [notice, setNotice] = useState("样本用于识别可回答范围。");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [swipedItemId, setSwipedItemId] = useState<string | null>(null);
+  const pointerStartRef = useRef<{ id: string; x: number } | null>(null);
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
+  const approvedCount = items.filter((item) => item.status === "approved").length;
+  const draftCount = items.filter((item) => item.status === "draft").length;
+
+  const refreshItems = useCallback(async () => {
+    if (!selectedKnowledgeBase.id) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "样本加载失败。"));
+      }
+      const nextItems = (await response.json()) as BoundaryDatasetItem[];
+      setItems(nextItems);
+      setSelectedItemId((current) => current ?? nextItems[0]?.id ?? null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "样本加载失败。");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedKnowledgeBase.id]);
+
+  useEffect(() => {
+    setSelectedItemId(null);
+    void refreshItems();
+  }, [refreshItems]);
+
+  useEffect(() => {
+    if (selectedItem) {
+      setEditText(selectedItem.text);
+      setEditLabel(selectedItem.label);
+    } else {
+      setEditText("");
+      setEditLabel(1);
+    }
+  }, [selectedItem?.id, selectedItem?.label, selectedItem?.text]);
+
+  async function createManualItem() {
+    const text = manualText.trim();
+    if (!text) {
+      setNotice("请输入样本文本。");
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, label: manualLabel }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "样本添加失败。"));
+      }
+      const created = (await response.json()) as BoundaryDatasetItem;
+      setItems((current) => [created, ...current]);
+      setSelectedItemId(created.id);
+      setManualText("");
+      setNotice("样本已添加。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "样本添加失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveSelectedItem() {
+    if (!selectedItem) {
+      return;
+    }
+    const text = editText.trim();
+    if (!text) {
+      setNotice("样本文本不能为空。");
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/${selectedItem.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, label: editLabel, status: "approved" }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "样本保存失败。"));
+      }
+      const updated = (await response.json()) as BoundaryDatasetItem;
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setNotice("样本已保存。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "样本保存失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function generateItems() {
+    setGenerating(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: aiCount, label_hint: aiHint.trim() }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "智能扩充失败。"));
+      }
+      const generatedItems = (await response.json()) as BoundaryDatasetItem[];
+      setItems((current) => [...generatedItems, ...current]);
+      setSelectedItemId(generatedItems[0]?.id ?? selectedItemId);
+      setNotice(`${generatedItems.length} 条候选样本已生成。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "智能扩充失败。");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function deleteItem(itemId: string) {
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/${itemId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "样本删除失败。"));
+      }
+      setItems((current) => {
+        const nextItems = current.filter((item) => item.id !== itemId);
+        if (selectedItemId === itemId) {
+          setSelectedItemId(nextItems[0]?.id ?? null);
+        }
+        return nextItems;
+      });
+      setSwipedItemId(null);
+      setNotice("样本已删除。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "样本删除失败。");
+    }
+  }
+
+  const visibleItems = items.slice(0, 8);
+
+  return (
+    <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
+      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
+        <div className="grid min-h-0 grid-rows-[190px_auto_minmax(0,1fr)] gap-4">
+          <VisualHero
+            image={BOUNDARY_VISUAL_SRC}
+            eyebrow="Boundary"
+            title="边界训练"
+            description="维护范围内外样本，让问答边界更稳。"
+          />
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardContent className="space-y-3 p-4">
+              <label className="text-xs font-medium text-[var(--muted)]" htmlFor="boundary-kb-select">
+                当前知识库
+              </label>
+              <select
+                id="boundary-kb-select"
+                value={selectedKnowledgeBase.id}
+                onChange={(event) => onSelect(event.target.value)}
+                className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)]"
+              >
+                {knowledgeBases.map((knowledgeBase) => (
+                  <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                    {knowledgeBase.name}
+                  </option>
+                ))}
+              </select>
+              <div className="grid grid-cols-3 gap-2">
+                <MiniStat label="样本" value={`${items.length}`} />
+                <MiniStat label="确认" value={`${approvedCount}`} />
+                <MiniStat label="待审" value={`${draftCount}`} />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="shrink-0">
+              <h2 className="text-sm font-semibold">手动添加</h2>
+              <p className="text-xs text-[var(--muted)]">录入真实用户问题</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <BoundaryLabelToggle value={manualLabel} onChange={setManualLabel} />
+              <textarea
+                value={manualText}
+                onChange={(event) => setManualText(event.target.value)}
+                placeholder="例如：校园卡丢了怎么办？"
+                rows={4}
+                className="w-full resize-none rounded-xl border border-[var(--border)] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[var(--accent)]"
+              />
+              <Button type="button" variant="primary" className="w-full justify-center" onClick={createManualItem} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
+                添加
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
+          <CardHeader className="shrink-0">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">样本卡片</h2>
+                <p className="text-xs text-[var(--muted)]">{notice}</p>
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={() => void refreshItems()} disabled={loading}>
+                {loading ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+                刷新
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="min-h-0 flex-1 p-4">
+            {visibleItems.length ? (
+              <div className="grid h-full min-h-0 auto-rows-fr grid-cols-1 gap-3 md:grid-cols-2">
+                {visibleItems.map((item) => (
+                  <BoundaryItemCard
+                    key={item.id}
+                    item={item}
+                    active={selectedItem?.id === item.id}
+                    swiped={swipedItemId === item.id}
+                    onSelect={() => {
+                      setSelectedItemId(item.id);
+                      setSwipedItemId(null);
+                    }}
+                    onDelete={() => void deleteItem(item.id)}
+                    onPointerStart={(x) => {
+                      pointerStartRef.current = { id: item.id, x };
+                    }}
+                    onPointerEnd={(x) => {
+                      const start = pointerStartRef.current;
+                      if (start?.id === item.id && start.x - x > 46) {
+                        setSwipedItemId(item.id);
+                      } else if (start?.id === item.id && x - start.x > 20) {
+                        setSwipedItemId(null);
+                      }
+                      pointerStartRef.current = null;
+                    }}
+                  />
                 ))}
               </div>
+            ) : (
+              <PanelEmpty icon={BrainCircuit} title="等待样本" description="添加或智能扩充后即可训练边界。" />
+            )}
+          </CardContent>
+        </Card>
+
+        <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4">
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">智能扩充</h2>
+              <p className="text-xs text-[var(--muted)]">基于当前知识库生成候选样本</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-[1fr_92px] gap-2">
+                <input
+                  value={aiHint}
+                  onChange={(event) => setAiHint(event.target.value)}
+                  placeholder="类别提示"
+                  className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={aiCount}
+                  aria-label="生成数量"
+                  onChange={(event) => setAiCount(Math.max(1, Math.min(30, Number(event.target.value) || 1)))}
+                  className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                />
+              </div>
+              <Button type="button" variant="primary" className="w-full justify-center" onClick={generateItems} disabled={generating}>
+                {generating ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
+                生成候选
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="shrink-0">
+              <h2 className="text-sm font-semibold">编辑样本</h2>
+              <p className="text-xs text-[var(--muted)]">点击卡片后可调整内容</p>
+            </CardHeader>
+            <CardContent className="flex min-h-0 flex-col gap-3">
+              {selectedItem ? (
+                <>
+                  <div className="rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(180deg,#ffffff_0%,#f4fbf9_100%)] p-3 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <StatusChip
+                        label={selectedItem.status === "approved" ? "已确认" : "待确认"}
+                        tone={selectedItem.status === "approved" ? "ok" : "warning"}
+                      />
+                      <span className="text-xs text-[var(--muted)]">{selectedItem.source === "llm" ? "智能" : "手动"}</span>
+                    </div>
+                    <BoundaryLabelToggle value={editLabel} onChange={setEditLabel} />
+                    <textarea
+                      value={editText}
+                      onChange={(event) => setEditText(event.target.value)}
+                      rows={7}
+                      className="mt-3 w-full flex-1 resize-none rounded-xl border border-[var(--border)] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <Button type="button" variant="primary" className="justify-center" onClick={saveSelectedItem} disabled={saving}>
+                      {saving ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
+                      保存
+                    </Button>
+                    <Button type="button" variant="secondary" size="icon" title="删除样本" onClick={() => void deleteItem(selectedItem.id)}>
+                      <X size={15} aria-hidden="true" />
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <PanelEmpty icon={PenLine} title="选择样本" description="点击左侧卡片进行编辑。" />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardContent className="grid grid-cols-3 gap-2 p-3">
+              <MiniStat label="范围内" value={`${items.filter((item) => item.label === 1).length}`} />
+              <MiniStat label="范围外" value={`${items.filter((item) => item.label === 0).length}`} />
+              <MiniStat label="显示" value={`${visibleItems.length}`} />
             </CardContent>
           </Card>
         </aside>
@@ -1452,26 +1799,57 @@ function HealthPill({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function AdminMetric({
-  icon: Icon,
-  label,
-  value,
+function VisualHero({
+  image,
+  eyebrow,
+  title,
+  description,
 }: {
-  icon: typeof FileText;
-  label: string;
-  value: string;
+  image: string;
+  eyebrow: string;
+  title: string;
+  description: string;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-white/82 p-4 shadow-sm">
-      <div className="flex items-center gap-3">
+    <div className="relative overflow-hidden rounded-xl border border-[var(--border)] bg-white shadow-[var(--shadow-soft)]">
+      <Image src={image} alt="" fill sizes="360px" className="object-cover opacity-90" />
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.94)_0%,rgba(255,255,255,0.74)_54%,rgba(255,255,255,0.28)_100%)]" />
+      <div className="relative flex h-full flex-col justify-end p-4">
+        <span className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full border border-[var(--border)] bg-white/78 px-2.5 py-1 text-[11px] font-medium text-[var(--accent-strong)] shadow-sm backdrop-blur">
+          <Sparkles size={12} aria-hidden="true" />
+          {eyebrow}
+        </span>
+        <h1 className="text-2xl font-semibold tracking-normal">{title}</h1>
+        <p className="mt-1 max-w-[240px] text-xs leading-5 text-[var(--muted)]">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-white px-3 py-2.5 shadow-sm">
+      <div className="flex min-w-0 items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
-          <Icon size={17} aria-hidden="true" />
+          <FileText size={16} aria-hidden="true" />
         </div>
         <div className="min-w-0">
-          <p className="truncate text-xs text-[var(--muted)]">{label}</p>
-          <p className="truncate text-lg font-semibold">{value}</p>
+          <p className="truncate text-sm font-semibold">{document.title}</p>
+          <p className="truncate text-xs text-[var(--muted)]">
+            {document.filename} · {formatFileSize(document.size)}
+          </p>
         </div>
       </div>
+      <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white/82 px-2 py-2 text-center shadow-sm">
+      <p className="truncate text-[11px] text-[var(--muted)]">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold">{value}</p>
     </div>
   );
 }
@@ -1524,22 +1902,87 @@ function StatusChip({ label, tone = "muted" }: { label: string; tone?: "ok" | "m
   );
 }
 
-function GovernanceStep({
-  icon: Icon,
-  title,
-  description,
+function BoundaryLabelToggle({
+  value,
+  onChange,
 }: {
-  icon: typeof PenLine;
-  title: string;
-  description: string;
+  value: 0 | 1;
+  onChange: (value: 0 | 1) => void;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-white/82 p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md">
-      <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
-        <Icon size={16} aria-hidden="true" />
-      </div>
-      <p className="text-sm font-semibold">{title}</p>
-      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{description}</p>
+    <div className="grid grid-cols-2 gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel-muted)] p-1">
+      {[
+        { value: 1 as const, label: "范围内" },
+        { value: 0 as const, label: "范围外" },
+      ].map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "h-8 rounded-md text-xs font-semibold transition",
+            value === option.value
+              ? "bg-white text-[var(--accent-strong)] shadow-sm"
+              : "text-[var(--muted)] hover:bg-white/72 hover:text-[var(--foreground)]",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function BoundaryItemCard({
+  item,
+  active,
+  swiped,
+  onSelect,
+  onDelete,
+  onPointerStart,
+  onPointerEnd,
+}: {
+  item: BoundaryDatasetItem;
+  active: boolean;
+  swiped: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onPointerStart: (x: number) => void;
+  onPointerEnd: (x: number) => void;
+}) {
+  return (
+    <div className="relative min-h-0 overflow-hidden rounded-2xl">
+      <button
+        type="button"
+        onClick={onDelete}
+        className="absolute inset-y-0 right-0 flex w-16 items-center justify-center rounded-2xl bg-[var(--danger)] text-white shadow-sm"
+        aria-label="删除样本"
+      >
+        <X size={16} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        onPointerDown={(event) => onPointerStart(event.clientX)}
+        onPointerUp={(event) => onPointerEnd(event.clientX)}
+        onPointerCancel={(event) => onPointerEnd(event.clientX)}
+        className={cn(
+          "relative flex h-full min-h-[118px] w-full flex-col justify-between rounded-2xl border bg-white p-4 text-left shadow-sm transition duration-300 ease-out",
+          active ? "border-[var(--accent)] shadow-[0_20px_48px_rgba(0,108,99,0.14)]" : "border-[var(--border)] hover:border-[var(--accent-soft)] hover:shadow-md",
+          active ? "scale-[1.01]" : "",
+          swiped ? "-translate-x-14" : "translate-x-0",
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <StatusChip label={item.label === 1 ? "范围内" : "范围外"} tone={item.label === 1 ? "ok" : "warning"} />
+          <span className="text-[11px] text-[var(--muted)]">{item.source === "llm" ? "智能" : "手动"}</span>
+        </div>
+        <p className="mt-3 line-clamp-2 text-sm font-medium leading-6">{item.text}</p>
+        <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-[var(--muted)]">
+          <span>{item.status === "approved" ? "已确认" : "待确认"}</span>
+          <span>{formatTimestamp(item.created_at)}</span>
+        </div>
+      </button>
     </div>
   );
 }

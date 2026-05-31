@@ -7,6 +7,7 @@ __pycache__/
 logs/*.out
 logs/*.log
 logs/*.pid
+.playwright-cli/
 
 data/index/
 data/knowledge_bases/
