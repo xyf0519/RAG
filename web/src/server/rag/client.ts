@@ -11,6 +11,14 @@ export function createRequestId() {
   return crypto.randomUUID();
 }
 
+function withInternalAuth(headers?: HeadersInit): HeadersInit {
+  const token = process.env.INTERNAL_API_KEY;
+  return {
+    ...(headers ?? {}),
+    ...(token ? { "X-Internal-API-Key": token } : {}),
+  };
+}
+
 export async function proxyBackendHealth() {
   const response = await fetch(`${getBackendUrl()}/health`, {
     cache: "no-store",
@@ -30,6 +38,7 @@ export async function proxyChatStream(payload: ChatRequest, requestId: string) {
     headers: {
       "Content-Type": "application/json",
       "X-Request-ID": requestId,
+      ...withInternalAuth(),
     },
     body: JSON.stringify(payload),
     cache: "no-store",
@@ -49,10 +58,10 @@ export async function proxyBackendJson(path: string, init?: RequestInit) {
     cache: "no-store",
     signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     headers: init?.body instanceof FormData
-      ? init.headers
+      ? withInternalAuth(init.headers)
       : {
           "Content-Type": "application/json",
-          ...(init?.headers ?? {}),
+          ...withInternalAuth(init?.headers),
         },
   });
 

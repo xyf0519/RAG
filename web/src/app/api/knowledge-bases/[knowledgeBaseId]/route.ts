@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireAdmin } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
 
 export const runtime = "nodejs";
@@ -8,6 +9,10 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ knowledgeBaseId: string }> },
 ) {
+  const auth = await requireAdmin(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
   const { knowledgeBaseId } = await context.params;
   try {
     const body = await request.json();

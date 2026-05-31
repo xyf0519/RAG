@@ -6,11 +6,25 @@ import { AuthProvider } from "@/features/auth/auth-provider";
 import { ChatWorkspace } from "./chat-workspace";
 
 describe("ChatWorkspace", () => {
+  let currentRole: "admin" | "user" = "admin";
+
   beforeEach(() => {
+    currentRole = "admin";
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
+        if (url.includes("/api/auth/session")) {
+          return jsonResponse({
+            ok: true,
+            user: {
+              id: currentRole,
+              name: currentRole === "admin" ? "知识库管理员" : "知识库用户",
+              email: currentRole === "admin" ? "admin@zju.edu.cn" : "user@zju.edu.cn",
+              role: currentRole,
+            },
+          });
+        }
         if (url.includes("/api/health")) {
           return jsonResponse({ ok: true, backend: { ok: true, app: "xyfRAG" } });
         }
@@ -83,19 +97,8 @@ describe("ChatWorkspace", () => {
   });
 
   function seedSession(role: "admin" | "user") {
+    currentRole = role;
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "xyfrag.auth.v1",
-      JSON.stringify({
-        user: {
-          id: role,
-          name: role === "admin" ? "知识库管理员" : "知识库用户",
-          email: role === "admin" ? "admin@xyfrag.cn" : "user@xyfrag.cn",
-          role,
-        },
-        issuedAt: Date.now(),
-      }),
-    );
   }
 
   function seedChatHistory() {
@@ -140,7 +143,7 @@ describe("ChatWorkspace", () => {
     );
   }
 
-  it("renders the usable first screen", () => {
+  it("renders the usable first screen", async () => {
     seedSession("admin");
 
     render(
@@ -149,13 +152,13 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    expect(screen.getAllByRole("heading", { name: "xyfRAG" }).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole("heading", { name: "xyfRAG" })).length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText("输入校园资料库相关问题...")).toBeInTheDocument();
     expect(screen.getByText("有什么需要查询？")).toBeInTheDocument();
     expect(screen.queryByText("挂科后什么时候申请补考？")).not.toBeInTheDocument();
   });
 
-  it("opens the admin knowledge add workspace", () => {
+  it("opens the admin knowledge add workspace", async () => {
     seedSession("admin");
 
     render(
@@ -164,7 +167,7 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /添加知识库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /添加知识库/ }));
 
     expect(screen.getByRole("heading", { name: "添加知识库" })).toBeInTheDocument();
     expect(screen.getByText("拖拽或点击上传")).toBeInTheDocument();
@@ -180,7 +183,7 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /边界训练/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /边界训练/ }));
 
     expect(await screen.findByRole("heading", { name: "边界训练" })).toBeInTheDocument();
     expect(screen.getByText("手动添加")).toBeInTheDocument();
@@ -194,7 +197,7 @@ describe("ChatWorkspace", () => {
     expect(screen.getByRole("button", { name: "删除样本" })).toBeInTheDocument();
   });
 
-  it("opens the admin quality analytics workspace", () => {
+  it("opens the admin quality analytics workspace", async () => {
     seedSession("admin");
 
     render(
@@ -203,14 +206,14 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /质量分析/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /质量分析/ }));
 
     expect(screen.getByRole("heading", { name: "质量分析中心" })).toBeInTheDocument();
     expect(screen.getByText("可信回答趋势")).toBeInTheDocument();
     expect(screen.getByText("待复核回答")).toBeInTheDocument();
   });
 
-  it("collapses the desktop sidebar into icon actions", () => {
+  it("collapses the desktop sidebar into icon actions", async () => {
     seedSession("admin");
 
     render(
@@ -219,13 +222,13 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "收起侧栏" }));
+    fireEvent.click(await screen.findByRole("button", { name: "收起侧栏" }));
 
     expect(screen.getAllByRole("button", { name: "展开侧栏" }).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "新建问答" })).toBeInTheDocument();
   });
 
-  it("keeps knowledge governance hidden from regular users", () => {
+  it("keeps knowledge governance hidden from regular users", async () => {
     seedSession("user");
 
     render(
@@ -234,12 +237,13 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
+    await screen.findByPlaceholderText("输入校园资料库相关问题...");
     expect(screen.queryByRole("button", { name: /添加知识库/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /边界训练/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /质量分析/ })).not.toBeInTheDocument();
   });
 
-  it("restores saved sessions from the history list", () => {
+  it("restores saved sessions from the history list", async () => {
     seedSession("admin");
     seedChatHistory();
 
@@ -249,12 +253,12 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /校园卡挂失流程/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /校园卡挂失流程/ }));
 
     expect(screen.getByText("校园卡遗失后应及时挂失。")).toBeInTheDocument();
   });
 
-  it("records answer feedback in the conversation", () => {
+  it("records answer feedback in the conversation", async () => {
     seedSession("admin");
     seedChatHistory();
 
@@ -264,7 +268,7 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "回答有帮助" }));
+    fireEvent.click(await screen.findByRole("button", { name: "回答有帮助" }));
 
     expect(screen.getByText("反馈已记录")).toBeInTheDocument();
   });

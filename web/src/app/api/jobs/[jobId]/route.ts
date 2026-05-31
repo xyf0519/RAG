@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireAdmin } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ jobId: string }> },
 ) {
+  const auth = await requireAdmin(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
   const { jobId } = await context.params;
   try {
     return NextResponse.json(await proxyBackendJson(`/api/v1/jobs/${jobId}`));

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { signSession } from "@/server/auth/session";
 import { POST } from "./route";
 
 describe("/api/chat", () => {
@@ -8,8 +9,21 @@ describe("/api/chat", () => {
   });
 
   it("returns a typed error event for invalid payloads", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "user-1", name: "求是用户", email: "user@zju.edu.cn", role: "user" },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
     const request = new Request("http://localhost/api/chat", {
       method: "POST",
+      headers: { Cookie: `xyfrag.session=${signSession("user-1")}` },
       body: JSON.stringify({ query: "" }),
     }) as Parameters<typeof POST>[0];
 
@@ -24,7 +38,16 @@ describe("/api/chat", () => {
   it("forwards the selected knowledge base to the backend", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url).includes("/api/v1/auth/users/")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              user: { id: "user-1", name: "求是用户", email: "user@zju.edu.cn", role: "user" },
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
         expect(JSON.parse(String(init?.body))).toMatchObject({
           query: "校园卡丢了怎么办",
           session_id: "session-a",
@@ -55,6 +78,7 @@ describe("/api/chat", () => {
 
     const request = new Request("http://localhost/api/chat", {
       method: "POST",
+      headers: { Cookie: `xyfrag.session=${signSession("user-1")}` },
       body: JSON.stringify({
         query: "校园卡丢了怎么办",
         session_id: "session-a",

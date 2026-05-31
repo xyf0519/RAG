@@ -5,11 +5,33 @@ import {
   createRequestId,
   proxyChatStream,
 } from "@/server/rag/client";
+import { requireUser } from "@/server/auth/session";
 import type { ChatRequest } from "@/shared/types/chat";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  const auth = await requireUser(request);
+  if (!auth.ok) {
+    return new Response(
+      `${JSON.stringify({
+        type: "error",
+        payload: {
+          code: "UNAUTHORIZED",
+          message: "请先登录。",
+          retryable: false,
+        },
+      })}\n`,
+      {
+        status: 401,
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }
+
   const requestId = createRequestId();
   const payload = await parsePayload(request);
 

@@ -21,6 +21,28 @@ OPENAI_API_KEY=你的 API Key
 OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
+浙大邮箱注册登录需要以下配置：
+
+```bash
+AUTH_SECRET=请替换为长随机字符串
+INTERNAL_API_KEY=请替换为长随机字符串
+ALLOWED_EMAIL_DOMAIN=zju.edu.cn
+ADMIN_EMAILS=admin@zju.edu.cn
+
+# 开发环境可使用固定验证码，生产环境请删除。
+AUTH_DEV_CODE=123456
+
+# 生产环境用于发送注册和重置密码验证码。
+SMTP_HOST=smtp.example.edu.cn
+SMTP_PORT=465
+SMTP_USER=xyfrag@example.edu.cn
+SMTP_PASSWORD=你的 SMTP 密码
+SMTP_FROM=xyfrag@example.edu.cn
+SMTP_TLS=true
+```
+
+所有新用户必须使用 `@zju.edu.cn` 邮箱并完成验证码校验后才能注册。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。
+
 没有 API Key 时，默认 `llm.allow_mock_when_no_key: true` 会启用本地抽取式回答。
 
 BGE embedding/reranker 不走 OpenAI API，不需要在 `.env` 填 BGE API Key。注意：`requirements-local-models.txt` 只安装加载库，不会下载模型权重。当前默认配置从本地模型目录加载：
@@ -129,6 +151,12 @@ http://127.0.0.1:3000
 
 | 路由 | 说明 |
 | --- | --- |
+| `GET /api/auth/session` | Next.js 返回当前登录用户 |
+| `POST /api/auth/register/start` | 发送注册验证码 |
+| `POST /api/auth/register/verify` | 校验验证码并创建账号 |
+| `POST /api/auth/login` | 邮箱密码登录 |
+| `POST /api/auth/password-reset/start` | 发送重置密码验证码 |
+| `POST /api/auth/password-reset/confirm` | 校验验证码并重置密码 |
 | `GET /api/health` | Next.js 检查 FastAPI 健康状态 |
 | `POST /api/chat` | Next.js 代理 FastAPI 流式问答 |
 
@@ -153,6 +181,7 @@ curl -X POST http://127.0.0.1:8000/chat \
 ```bash
 curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
   -H 'Content-Type: application/json' \
+  -H 'X-Internal-API-Key: 你的 INTERNAL_API_KEY' \
   -d '{"query":"挂科后什么时候申请补考？","session_id":"demo"}'
 ```
 
@@ -199,6 +228,14 @@ E2E 使用 mocked BFF 响应验证桌面和移动端工作台基础体验。
 ```bash
 docker compose -f docker-compose.demo.yml up --build
 ```
+
+内网单机部署：
+
+```bash
+docker compose -f docker-compose.intranet.yml up --build -d
+```
+
+该部署包含 `nginx`、`web`、`backend` 三个服务，只把 Nginx 的 `80/443` 暴露给校网，FastAPI 不映射到宿主机端口。`data/`、`models/`、`logs/` 使用 Docker volume 持久化，生产环境请定期备份。
 
 访问：
 

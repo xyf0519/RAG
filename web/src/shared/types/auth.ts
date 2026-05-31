@@ -11,3 +11,8 @@ export type AuthSession = {
   user: AuthUser;
   issuedAt: number;
 };
+
+export type AuthSessionResponse = {
+  ok: boolean;
+  user: AuthUser | null;
+};

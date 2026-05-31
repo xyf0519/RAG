@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import logging
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
-from typing import Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal, Optional, Union
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from xyfrag.auth_store import (
+    AuthError,
+    AuthStore,
+    AuthUserRecord,
+    admin_emails_from_env,
+    allowed_domain_from_env,
+    send_email_code,
+)
 from xyfrag.config import get_settings
 from xyfrag.knowledge_base import (
     BoundaryDatasetItemRecord,
@@ -30,6 +39,14 @@ from xyfrag.service import RAGService
 from xyfrag.session import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
+
+
+def verify_internal_api_key(
+    x_internal_api_key: Annotated[Optional[str], Header()] = None,
+) -> None:
+    expected = os.getenv("INTERNAL_API_KEY", "")
+    if expected and x_internal_api_key != expected:
+        raise HTTPException(status_code=401, detail="内部服务令牌无效。")
 
 
 class ChatRequest(BaseModel):
@@ -185,6 +202,41 @@ class BoundaryDatasetItemResponse(BaseModel):
     created_at: float
 
 
+class AuthCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class RegisterVerifyRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+    code: str = Field(min_length=4, max_length=12)
+    name: str = Field(default="", max_length=80)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    code: str = Field(min_length=4, max_length=12)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    role: str
+
+
+class AuthResponse(BaseModel):
+    ok: bool
+    user: Optional[AuthUserResponse] = None
+    message: str = ""
+
+
 def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
     """Return a RAG service scoped to one knowledge base.
 
@@ -241,11 +293,17 @@ async def lifespan(app: FastAPI) -> Any:
     configure_logging(settings)
     app.state.sessions = InMemorySessionStore()
     app.state.knowledge_store = KnowledgeBaseStore(settings)
+    app.state.auth_store = AuthStore(
+        settings.paths.ops_db,
+        allowed_domain=allowed_domain_from_env(),
+        admin_emails=admin_emails_from_env(),
+    )
     app.state.rag_services = {}
     yield
 
 
 app = FastAPI(title="xyfRAG", version="0.1.0", lifespan=lifespan)
+InternalAuth = Annotated[None, Depends(verify_internal_api_key)]
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -263,9 +321,98 @@ async def health() -> HealthResponse:
     return HealthResponse(ok=True, app=settings.app.name)
 
 
+@app.post("/api/v1/auth/register/start", response_model=AuthResponse)
+async def auth_register_start(
+    request: AuthCodeRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        code = store.start_email_code(request.email, "register")
+        send_email_code(store.normalize_email(request.email), code, "register")
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("stage=auth_register_start error=%s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail="验证码发送失败，请稍后重试。") from exc
+    return AuthResponse(ok=True, message="验证码已发送。")
+
+
+@app.post("/api/v1/auth/register/verify", response_model=AuthResponse)
+async def auth_register_verify(
+    request: RegisterVerifyRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        user = store.register(
+            email=request.email,
+            password=request.password,
+            code=request.code,
+            name=request.name,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user), message="注册成功。")
+
+
+@app.post("/api/v1/auth/login", response_model=AuthResponse)
+async def auth_login(
+    request: LoginRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        user = store.login(request.email, request.password)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user), message="登录成功。")
+
+
+@app.get("/api/v1/auth/users/{user_id}", response_model=AuthResponse)
+async def auth_get_user(user_id: str, _internal: InternalAuth) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        user = store.require_user(user_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user))
+
+
+@app.post("/api/v1/auth/password-reset/start", response_model=AuthResponse)
+async def auth_password_reset_start(
+    request: AuthCodeRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        code = store.start_email_code(request.email, "password_reset")
+        send_email_code(store.normalize_email(request.email), code, "password_reset")
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("stage=auth_password_reset_start error=%s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail="验证码发送失败，请稍后重试。") from exc
+    return AuthResponse(ok=True, message="验证码已发送。")
+
+
+@app.post("/api/v1/auth/password-reset/confirm", response_model=AuthResponse)
+async def auth_password_reset_confirm(
+    request: PasswordResetConfirmRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        user = store.reset_password(request.email, request.code, request.password)
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user), message="密码已更新。")
+
+
 @app.post("/chat", response_model=Union[ChatResponse, ErrorResponse])
 async def chat(
     request: ChatRequest,
+    _internal: InternalAuth,
     x_request_id: Optional[str] = Header(default=None),
 ) -> Union[ChatResponse, ErrorResponse]:
     """Run the RAG chat pipeline.
@@ -332,6 +479,7 @@ async def chat(
 @app.post("/api/v1/chat/stream")
 async def chat_stream(
     request: ChatRequest,
+    _internal: InternalAuth,
     x_request_id: Optional[str] = Header(default=None),
 ) -> StreamingResponse:
     """Run the RAG chat pipeline as newline-delimited JSON events.
@@ -402,7 +550,7 @@ async def chat_stream(
 
 
 @app.get("/api/v1/knowledge-bases", response_model=list[KnowledgeBaseResponse])
-async def list_knowledge_bases() -> list[KnowledgeBaseResponse]:
+async def list_knowledge_bases(_internal: InternalAuth) -> list[KnowledgeBaseResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     return [_kb_response(item) for item in store.list_knowledge_bases()]
 
@@ -410,6 +558,7 @@ async def list_knowledge_bases() -> list[KnowledgeBaseResponse]:
 @app.post("/api/v1/knowledge-bases", response_model=KnowledgeBaseResponse)
 async def create_knowledge_base(
     request: KnowledgeBaseCreateRequest,
+    _internal: InternalAuth,
 ) -> KnowledgeBaseResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
@@ -423,6 +572,7 @@ async def create_knowledge_base(
 async def update_knowledge_base(
     knowledge_base_id: str,
     request: KnowledgeBaseUpdateRequest,
+    _internal: InternalAuth,
 ) -> KnowledgeBaseResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     if request.status is not None and request.status not in {"active", "disabled"}:
@@ -444,7 +594,10 @@ async def update_knowledge_base(
     "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
     response_model=list[KnowledgeDocumentResponse],
 )
-async def list_documents(knowledge_base_id: str) -> list[KnowledgeDocumentResponse]:
+async def list_documents(
+    knowledge_base_id: str,
+    _internal: InternalAuth,
+) -> list[KnowledgeDocumentResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         return [_document_response(item) for item in store.list_documents(knowledge_base_id)]
@@ -458,6 +611,7 @@ async def list_documents(knowledge_base_id: str) -> list[KnowledgeDocumentRespon
 )
 async def upload_documents(
     knowledge_base_id: str,
+    _internal: InternalAuth,
     files: list[UploadFile] = File(...),
 ) -> list[KnowledgeDocumentResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
@@ -486,7 +640,10 @@ async def upload_documents(
     "/api/v1/knowledge-bases/{knowledge_base_id}/index-jobs",
     response_model=IndexJobResponse,
 )
-async def create_index_job(knowledge_base_id: str) -> IndexJobResponse:
+async def create_index_job(
+    knowledge_base_id: str,
+    _internal: InternalAuth,
+) -> IndexJobResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         job = store.create_index_job(knowledge_base_id)
@@ -497,7 +654,7 @@ async def create_index_job(knowledge_base_id: str) -> IndexJobResponse:
 
 
 @app.get("/api/v1/jobs/{job_id}", response_model=IndexJobResponse)
-async def get_job(job_id: str) -> IndexJobResponse:
+async def get_job(job_id: str, _internal: InternalAuth) -> IndexJobResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     job = store.get_job(job_id)
     if not job:
@@ -511,6 +668,7 @@ async def get_job(job_id: str) -> IndexJobResponse:
 )
 async def create_classifier_job(
     knowledge_base_id: str,
+    _internal: InternalAuth,
     request: ClassifierJobCreateRequest = ClassifierJobCreateRequest(),
 ) -> IndexJobResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
@@ -532,7 +690,10 @@ async def create_classifier_job(
     "/api/v1/knowledge-bases/{knowledge_base_id}/classifier-models",
     response_model=list[ClassifierModelResponse],
 )
-async def list_classifier_models(knowledge_base_id: str) -> list[ClassifierModelResponse]:
+async def list_classifier_models(
+    knowledge_base_id: str,
+    _internal: InternalAuth,
+) -> list[ClassifierModelResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         return [_classifier_model_response(item) for item in store.list_classifier_models(knowledge_base_id)]
@@ -544,7 +705,10 @@ async def list_classifier_models(knowledge_base_id: str) -> list[ClassifierModel
     "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items",
     response_model=list[BoundaryDatasetItemResponse],
 )
-async def list_boundary_items(knowledge_base_id: str) -> list[BoundaryDatasetItemResponse]:
+async def list_boundary_items(
+    knowledge_base_id: str,
+    _internal: InternalAuth,
+) -> list[BoundaryDatasetItemResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         return [_boundary_item_response(item) for item in store.list_boundary_items(knowledge_base_id)]
@@ -559,6 +723,7 @@ async def list_boundary_items(knowledge_base_id: str) -> list[BoundaryDatasetIte
 async def create_boundary_item(
     knowledge_base_id: str,
     request: BoundaryDatasetItemCreateRequest,
+    _internal: InternalAuth,
 ) -> BoundaryDatasetItemResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
@@ -584,6 +749,7 @@ async def update_boundary_item(
     knowledge_base_id: str,
     item_id: str,
     request: BoundaryDatasetItemUpdateRequest,
+    _internal: InternalAuth,
 ) -> BoundaryDatasetItemResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
@@ -605,7 +771,11 @@ async def update_boundary_item(
     "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items/{item_id}",
     response_model=dict[str, bool],
 )
-async def delete_boundary_item(knowledge_base_id: str, item_id: str) -> dict[str, bool]:
+async def delete_boundary_item(
+    knowledge_base_id: str,
+    item_id: str,
+    _internal: InternalAuth,
+) -> dict[str, bool]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         store.delete_boundary_item(knowledge_base_id, item_id)
@@ -621,6 +791,7 @@ async def delete_boundary_item(knowledge_base_id: str, item_id: str) -> dict[str
 async def generate_boundary_items(
     knowledge_base_id: str,
     request: BoundaryDatasetGenerateRequest,
+    _internal: InternalAuth,
 ) -> list[BoundaryDatasetItemResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
@@ -649,7 +820,7 @@ async def generate_boundary_items(
 
 
 @app.delete("/sessions/{session_id}", response_model=dict[str, bool])
-async def clear_session(session_id: str) -> dict[str, bool]:
+async def clear_session(session_id: str, _internal: InternalAuth) -> dict[str, bool]:
     """Clear one chat session.
 
     Args:
@@ -684,6 +855,15 @@ def _boundary_item_response(
 
 def _classifier_model_response(record: ClassifierModelRecord) -> ClassifierModelResponse:
     return ClassifierModelResponse(**record.__dict__)
+
+
+def _auth_user_response(record: AuthUserRecord) -> AuthUserResponse:
+    return AuthUserResponse(
+        id=record.id,
+        name=record.name,
+        email=record.email,
+        role=record.role,
+    )
 
 
 async def _generate_boundary_sample_candidates(

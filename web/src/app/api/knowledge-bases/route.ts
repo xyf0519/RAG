@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireAdmin, requireUser } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireUser(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
   try {
     return NextResponse.json(await proxyBackendJson("/api/v1/knowledge-bases"));
   } catch (error) {
@@ -16,6 +21,10 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
   try {
     const body = await request.json();
     return NextResponse.json(

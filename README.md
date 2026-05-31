@@ -88,6 +88,19 @@ cp .env.example .env.local
 npm run dev
 ```
 
+登录：
+
+```bash
+# 开发环境可使用固定验证码，生产环境请删除 AUTH_DEV_CODE 并配置 SMTP。
+AUTH_DEV_CODE=123456
+ALLOWED_EMAIL_DOMAIN=zju.edu.cn
+ADMIN_EMAILS=admin@zju.edu.cn
+AUTH_SECRET=请替换为长随机字符串
+INTERNAL_API_KEY=请替换为长随机字符串
+```
+
+工作台只允许 `@zju.edu.cn` 邮箱注册。注册和找回密码都会发送邮箱验证码；开发环境设置 `AUTH_DEV_CODE` 后，可直接使用固定验证码。
+
 打开：
 
 ```text
@@ -133,6 +146,14 @@ npm run e2e
 ```bash
 docker compose -f docker-compose.demo.yml up --build
 ```
+
+内网单机部署：
+
+```bash
+docker compose -f docker-compose.intranet.yml up --build -d
+```
+
+`docker-compose.intranet.yml` 只暴露 Nginx 的 `80/443`，FastAPI 只在 Docker 内网中被 Next.js BFF 调用。生产环境需要配置 `AUTH_SECRET`、`INTERNAL_API_KEY`、`SMTP_*`、`ADMIN_EMAILS`，并持久化备份 `data/`、`models/`、`logs/`。
 
 ## 目录地图
 

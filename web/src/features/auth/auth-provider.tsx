@@ -2,32 +2,16 @@
 
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import type { AuthSession, AuthUser, UserRole } from "@/shared/types/auth";
-
-const AUTH_KEY = "xyfrag.auth.v1";
-
-const DEMO_USERS: Record<UserRole, AuthUser> = {
-  admin: {
-    id: "admin",
-    name: "知识库管理员",
-    email: "admin@xyfrag.cn",
-    role: "admin",
-  },
-  user: {
-    id: "user",
-    name: "知识库用户",
-    email: "user@xyfrag.cn",
-    role: "user",
-  },
-};
+import type { AuthSession, AuthUser } from "@/shared/types/auth";
 
 type AuthContextValue = {
   session: AuthSession | null;
   user: AuthUser | null;
   ready: boolean;
   isAdmin: boolean;
-  signIn: (role: UserRole) => void;
-  signOut: () => void;
+  refreshSession: () => Promise<void>;
+  setAuthenticatedUser: (user: AuthUser) => void;
+  signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,30 +20,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [ready, setReady] = useState(false);
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem(AUTH_KEY);
-    if (stored) {
-      try {
-        setSession(JSON.parse(stored) as AuthSession);
-      } catch {
-        window.localStorage.removeItem(AUTH_KEY);
-      }
+  const refreshSession = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth/session", { cache: "no-store" });
+      const data = (await response.json()) as { user?: AuthUser | null };
+      setSession(data.user ? { user: data.user, issuedAt: Date.now() } : null);
+    } catch {
+      setSession(null);
+    } finally {
+      setReady(true);
     }
+  }, []);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession]);
+
+  const setAuthenticatedUser = useCallback((user: AuthUser) => {
+    setSession({ user, issuedAt: Date.now() });
     setReady(true);
   }, []);
 
-  const signIn = useCallback((role: UserRole) => {
-    const nextSession = {
-      user: DEMO_USERS[role],
-      issuedAt: Date.now(),
-    };
-    setSession(nextSession);
-    window.localStorage.setItem(AUTH_KEY, JSON.stringify(nextSession));
-  }, []);
-
-  const signOut = useCallback(() => {
-    setSession(null);
-    window.localStorage.removeItem(AUTH_KEY);
+  const signOut = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setSession(null);
+    }
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -68,10 +55,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       ready,
       isAdmin: session?.user.role === "admin",
-      signIn,
+      refreshSession,
+      setAuthenticatedUser,
       signOut,
     }),
-    [ready, session, signIn, signOut],
+    [ready, refreshSession, session, setAuthenticatedUser, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

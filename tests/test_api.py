@@ -52,6 +52,9 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     )
 
     monkeypatch.setattr(api, "get_settings", lambda: settings)
+    monkeypatch.setenv("AUTH_DEV_CODE", "123456")
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn")
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@zju.edu.cn")
 
 
 def test_health_endpoint() -> None:
@@ -88,6 +91,90 @@ def test_knowledge_base_management_endpoints() -> None:
         )
         assert file_response.status_code == 200
         assert file_response.json()[0]["filename"] == "guide.md"
+
+
+def test_email_auth_register_login_and_reset() -> None:
+    with TestClient(app) as client:
+        rejected = client.post("/api/v1/auth/register/start", json={"email": "user@example.com"})
+        assert rejected.status_code == 400
+
+        start = client.post("/api/v1/auth/register/start", json={"email": "user@zju.edu.cn"})
+        assert start.status_code == 200
+
+        wrong_code = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "user@zju.edu.cn",
+                "password": "password123",
+                "code": "000000",
+                "name": "求是用户",
+            },
+        )
+        assert wrong_code.status_code == 400
+
+        registered = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "user@zju.edu.cn",
+                "password": "password123",
+                "code": "123456",
+                "name": "求是用户",
+            },
+        )
+        assert registered.status_code == 200
+        assert registered.json()["user"]["role"] == "user"
+
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@zju.edu.cn", "password": "password123"},
+        )
+        assert login.status_code == 200
+        assert login.json()["user"]["email"] == "user@zju.edu.cn"
+
+        reset_start = client.post(
+            "/api/v1/auth/password-reset/start",
+            json={"email": "user@zju.edu.cn"},
+        )
+        assert reset_start.status_code == 200
+
+        reset_confirm = client.post(
+            "/api/v1/auth/password-reset/confirm",
+            json={
+                "email": "user@zju.edu.cn",
+                "code": "123456",
+                "password": "password456",
+            },
+        )
+        assert reset_confirm.status_code == 200
+
+        old_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@zju.edu.cn", "password": "password123"},
+        )
+        assert old_login.status_code == 401
+
+        new_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@zju.edu.cn", "password": "password456"},
+        )
+        assert new_login.status_code == 200
+
+
+def test_admin_email_gets_admin_role() -> None:
+    with TestClient(app) as client:
+        assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
+        response = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "admin@zju.edu.cn",
+                "password": "password123",
+                "code": "123456",
+                "name": "管理员",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["role"] == "admin"
 
 
 def test_boundary_item_endpoints() -> None:
