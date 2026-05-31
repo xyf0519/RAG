@@ -33,15 +33,28 @@ ADMIN_EMAILS=admin@zju.edu.cn
 AUTH_DEV_CODE=123456
 
 # 生产环境用于发送注册和重置密码验证码。
-SMTP_HOST=smtp.example.edu.cn
-SMTP_PORT=465
-SMTP_USER=xyfrag@example.edu.cn
-SMTP_PASSWORD=你的 SMTP 密码
-SMTP_FROM=xyfrag@example.edu.cn
-SMTP_TLS=true
+SMTP_HOST=smtp.zju.edu.cn
+SMTP_PORT=994
+SMTP_SECURITY=ssl
+SMTP_USER=你的浙大邮箱账号
+SMTP_PASSWORD=你的邮箱密码或客户端授权码
+SMTP_FROM=你的浙大邮箱账号
 ```
 
 所有新用户必须使用 `@zju.edu.cn` 邮箱并完成验证码校验后才能注册。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。
+
+如果你的邮箱服务要求 STARTTLS，可改成：
+
+```bash
+SMTP_PORT=25
+SMTP_SECURITY=starttls
+```
+
+填完 SMTP 后先执行真实发信测试：
+
+```bash
+PYTHONPATH=src .venv/bin/python3 scripts/send_test_email_code.py 3240105114@zju.edu.cn
+```
 
 没有 API Key 时，默认 `llm.allow_mock_when_no_key: true` 会启用本地抽取式回答。
 

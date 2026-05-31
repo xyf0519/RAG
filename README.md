@@ -101,6 +101,19 @@ INTERNAL_API_KEY=请替换为长随机字符串
 
 工作台只允许 `@zju.edu.cn` 邮箱注册。注册和找回密码都会发送邮箱验证码；开发环境设置 `AUTH_DEV_CODE` 后，可直接使用固定验证码。
 
+生产发信需配置 SMTP，例如：
+
+```bash
+SMTP_HOST=smtp.zju.edu.cn
+SMTP_PORT=994
+SMTP_SECURITY=ssl
+SMTP_USER=你的浙大邮箱账号
+SMTP_PASSWORD=你的邮箱密码或客户端授权码
+SMTP_FROM=你的浙大邮箱账号
+```
+
+填好后可用 `PYTHONPATH=src .venv/bin/python3 scripts/send_test_email_code.py 3240105114@zju.edu.cn` 验证是否能收到邮件。
+
 打开：
 
 ```text

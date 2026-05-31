@@ -350,10 +350,11 @@ def allowed_domain_from_env() -> str:
 def send_email_code(email: str, code: str, purpose: str) -> None:
     """Send an email code or log it in development mode."""
 
-    dev_code = os.getenv("AUTH_DEV_CODE")
     smtp_host = os.getenv("SMTP_HOST")
     smtp_from = os.getenv("SMTP_FROM") or os.getenv("SMTP_USER")
-    if dev_code or not smtp_host or not smtp_from:
+    username = os.getenv("SMTP_USER", "")
+    password = os.getenv("SMTP_PASSWORD", "")
+    if not smtp_host or not smtp_from or not username or not password:
         print(f"[xyfRAG auth] {purpose} code for {email}: {code}")
         return
 
@@ -364,18 +365,61 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
     message.set_content(f"你的 xyfRAG 验证码是：{code}\n\n验证码 10 分钟内有效，请勿转发。")
 
     port = int(os.getenv("SMTP_PORT", "465"))
-    username = os.getenv("SMTP_USER", "")
-    password = os.getenv("SMTP_PASSWORD", "")
-    use_tls = os.getenv("SMTP_TLS", "true").lower() != "false"
+    mode = os.getenv("SMTP_SECURITY", os.getenv("SMTP_TLS", "ssl")).lower()
 
-    if use_tls:
+    if mode in {"ssl", "smtps", "true"}:
         with smtplib.SMTP_SSL(smtp_host, port, timeout=10) as smtp:
-            if username:
-                smtp.login(username, password)
+            smtp.login(username, password)
+            smtp.send_message(message)
+    elif mode in {"starttls", "tls"}:
+        with smtplib.SMTP(smtp_host, port, timeout=10) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(username, password)
+            smtp.send_message(message)
+    elif mode in {"none", "plain", "false"}:
+        with smtplib.SMTP(smtp_host, port, timeout=10) as smtp:
+            smtp.login(username, password)
             smtp.send_message(message)
     else:
+        raise AuthError("SMTP_SECURITY 只能是 ssl、starttls 或 none。")
+
+
+def check_smtp_settings() -> None:
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_from = os.getenv("SMTP_FROM") or os.getenv("SMTP_USER")
+    username = os.getenv("SMTP_USER", "")
+    password = os.getenv("SMTP_PASSWORD", "")
+    missing = [
+        name
+        for name, value in {
+            "SMTP_HOST": smtp_host,
+            "SMTP_USER": username,
+            "SMTP_PASSWORD": password,
+            "SMTP_FROM": smtp_from,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise AuthError(f"SMTP 配置不完整：{', '.join(missing)}。")
+
+    port = int(os.getenv("SMTP_PORT", "465"))
+    mode = os.getenv("SMTP_SECURITY", os.getenv("SMTP_TLS", "ssl")).lower()
+    if mode in {"ssl", "smtps", "true"}:
+        with smtplib.SMTP_SSL(smtp_host, port, timeout=10) as smtp:
+            smtp.login(username, password)
+            smtp.noop()
+    elif mode in {"starttls", "tls"}:
         with smtplib.SMTP(smtp_host, port, timeout=10) as smtp:
+            smtp.ehlo()
             smtp.starttls()
-            if username:
-                smtp.login(username, password)
-            smtp.send_message(message)
+            smtp.ehlo()
+            smtp.login(username, password)
+            smtp.noop()
+    elif mode in {"none", "plain", "false"}:
+        with smtplib.SMTP(smtp_host, port, timeout=10) as smtp:
+            smtp.login(username, password)
+            smtp.noop()
+    else:
+        raise AuthError("SMTP_SECURITY 只能是 ssl、starttls 或 none。")
