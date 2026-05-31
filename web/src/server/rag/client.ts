@@ -43,6 +43,28 @@ export async function proxyChatStream(payload: ChatRequest, requestId: string) {
   return response;
 }
 
+export async function proxyBackendJson(path: string, init?: RequestInit) {
+  const response = await fetch(`${getBackendUrl()}${path}`, {
+    ...init,
+    cache: "no-store",
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+    headers: init?.body instanceof FormData
+      ? init.headers
+      : {
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {}),
+        },
+  });
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail = typeof data?.detail === "string" ? data.detail : "后端服务处理失败。";
+    throw new Error(detail);
+  }
+  return data;
+}
+
 export function buildBackendUnavailableEvent(message = "后端服务连接失败，请确认 FastAPI 已启动。") {
   return `${JSON.stringify({
     type: "error",

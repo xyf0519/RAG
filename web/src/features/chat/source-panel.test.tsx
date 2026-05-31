@@ -1,11 +1,56 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/features/auth/auth-provider";
 
 import { ChatWorkspace } from "./chat-workspace";
 
 describe("ChatWorkspace", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/health")) {
+          return jsonResponse({ ok: true, backend: { ok: true, app: "xyfRAG" } });
+        }
+        if (url.endsWith("/api/knowledge-bases")) {
+          return jsonResponse([
+            {
+              id: "kb-default",
+              name: "默认校园资料库",
+              description: "默认知识库",
+              status: "active",
+              document_count: 3,
+              index_status: "ready",
+              last_indexed_at: null,
+              updated_at: Date.now() / 1000,
+              created_at: Date.now() / 1000,
+            },
+          ]);
+        }
+        if (url.includes("/documents")) {
+          return jsonResponse([
+            {
+              id: "doc-guide",
+              knowledge_base_id: "kb-default",
+              filename: "guide.md",
+              title: "校园卡指南",
+              size: 128,
+              status: "indexed",
+              created_at: Date.now() / 1000,
+            },
+          ]);
+        }
+        return jsonResponse({});
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   function seedSession(role: "admin" | "user") {
     window.localStorage.clear();
     window.localStorage.setItem(
@@ -33,12 +78,16 @@ describe("ChatWorkspace", () => {
           role: "user",
           content: "校园卡挂失流程",
           createdAt: Date.now() - 60_000,
+          knowledgeBaseId: "kb-default",
+          knowledgeBaseName: "默认校园资料库",
         },
         {
           id: "assistant-history",
           role: "assistant",
           content: "校园卡遗失后应及时挂失。",
           createdAt: Date.now() - 55_000,
+          knowledgeBaseId: "kb-default",
+          knowledgeBaseName: "默认校园资料库",
         },
       ]),
     );
@@ -50,6 +99,8 @@ describe("ChatWorkspace", () => {
           title: "校园卡挂失流程",
           createdAt: Date.now() - 60_000,
           updatedAt: Date.now() - 55_000,
+          knowledgeBaseId: "kb-default",
+          knowledgeBaseName: "默认校园资料库",
           turnCount: 1,
           sourceCount: 0,
           hasFeedback: false,
@@ -85,8 +136,9 @@ describe("ChatWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: /知识库治理/ }));
 
     expect(screen.getByRole("heading", { name: "知识库治理中心" })).toBeInTheDocument();
-    expect(screen.getByText("知识源管理")).toBeInTheDocument();
-    expect(screen.getByText("入库队列")).toBeInTheDocument();
+    expect(screen.getByText("知识库列表")).toBeInTheDocument();
+    expect(screen.getByText("拖拽文档到这里，或点击上传")).toBeInTheDocument();
+    expect(screen.getByText("熔断器训练台")).toBeInTheDocument();
   });
 
   it("opens the admin quality analytics workspace", () => {
@@ -163,3 +215,10 @@ describe("ChatWorkspace", () => {
     expect(screen.getByText("反馈已记录")).toBeInTheDocument();
   });
 });
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}

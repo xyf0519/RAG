@@ -28,6 +28,9 @@ class PathConfig(BaseModel):
     raw_docs_dir: Path = Path("data/raw")
     index_dir: Path = Path("data/index")
     classifier_dir: Path = Path("models/boundary_classifier")
+    knowledge_bases_dir: Path = Path("data/knowledge_bases")
+    knowledge_models_dir: Path = Path("models/knowledge_bases")
+    ops_db: Path = Path("data/ops.sqlite3")
     log_file: Path = Path("logs/xyfrag.log")
 
 
@@ -138,6 +141,9 @@ def _resolve_settings_paths(settings: Settings) -> Settings:
     settings.paths.raw_docs_dir = _project_path(settings.paths.raw_docs_dir)
     settings.paths.index_dir = _project_path(settings.paths.index_dir)
     settings.paths.classifier_dir = _project_path(settings.paths.classifier_dir)
+    settings.paths.knowledge_bases_dir = _project_path(settings.paths.knowledge_bases_dir)
+    settings.paths.knowledge_models_dir = _project_path(settings.paths.knowledge_models_dir)
+    settings.paths.ops_db = _project_path(settings.paths.ops_db)
     settings.paths.log_file = _project_path(settings.paths.log_file)
     return settings
 
@@ -170,6 +176,9 @@ def get_settings(config_path: str = "config/settings.yaml") -> Settings:
         settings.paths.raw_docs_dir,
         settings.paths.index_dir,
         settings.paths.classifier_dir,
+        settings.paths.knowledge_bases_dir,
+        settings.paths.knowledge_models_dir,
+        settings.paths.ops_db.parent,
         settings.paths.log_file.parent,
     ):
         path.mkdir(parents=True, exist_ok=True)

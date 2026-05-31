@@ -38,7 +38,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -53,6 +53,9 @@ import type {
   ChatSessionSummary,
   ChatStatusPayload,
   FeedbackRating,
+  IndexJob,
+  KnowledgeBase,
+  KnowledgeDocument,
   Source,
 } from "@/shared/types/chat";
 
@@ -93,38 +96,23 @@ const NAV_ITEMS: Array<{
   { id: "quality", label: "质量分析", icon: BarChart3, badge: "治理", adminOnly: true },
 ];
 
-const KNOWLEDGE_SOURCES = [
-  {
-    title: "浙江大学校园一卡通图书馆功能开通办法",
-    owner: "图书馆",
-    chunks: 42,
-    updatedAt: "今天 09:24",
-    status: "已同步",
-    quality: "高",
-  },
-  {
-    title: "学生请假与销假管理说明",
-    owner: "学生事务",
-    chunks: 35,
-    updatedAt: "昨天 18:10",
-    status: "已同步",
-    quality: "高",
-  },
-  {
-    title: "宿舍管理规定摘要",
-    owner: "公寓服务",
-    chunks: 28,
-    updatedAt: "2 天前",
-    status: "待复核",
-    quality: "中",
-  },
-];
-
 const GOVERNANCE_CHECKS = [
   { label: "引用片段可追溯", value: "已启用" },
   { label: "越界问题拦截", value: "已启用" },
   { label: "知识源版本记录", value: "已启用" },
 ];
+
+const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
+  id: "kb-default",
+  name: "默认校园资料库",
+  description: "默认知识库",
+  status: "active",
+  document_count: 0,
+  index_status: "not_indexed",
+  last_indexed_at: null,
+  updated_at: Date.now() / 1000,
+  created_at: Date.now() / 1000,
+};
 
 const QUALITY_REVIEWS = [
   {
@@ -205,6 +193,9 @@ export function ChatWorkspace() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [copiedAnswerId, setCopiedAnswerId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([DEFAULT_KNOWLEDGE_BASE]);
+  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE.id);
+  const [knowledgeNotice, setKnowledgeNotice] = useState("知识库运维状态正常。");
 
   useEffect(() => {
     let mounted = true;
@@ -232,6 +223,30 @@ export function ChatWorkspace() {
     };
   }, []);
 
+  const refreshKnowledgeBases = useCallback(async () => {
+    try {
+      const response = await fetch("/api/knowledge-bases", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("知识库列表加载失败。");
+      }
+      const data = (await response.json()) as KnowledgeBase[];
+      if (data.length) {
+        setKnowledgeBases(data);
+        setSelectedKnowledgeBaseId((current) =>
+          data.some((item) => item.id === current) ? current : data[0].id,
+        );
+      }
+    } catch {
+      setKnowledgeBases((current) => (current.length ? current : [DEFAULT_KNOWLEDGE_BASE]));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (auth.user) {
+      void refreshKnowledgeBases();
+    }
+  }, [auth.user, refreshKnowledgeBases]);
+
   const currentSources = chat.activeSources.length
     ? chat.activeSources
     : chat.latestAssistant?.sources ?? [];
@@ -245,6 +260,8 @@ export function ChatWorkspace() {
     () => [...chat.messages].reverse().find((message) => message.role === "user"),
     [chat.messages],
   );
+  const selectedKnowledgeBase =
+    knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const stats = {
     turns: chat.messages.filter((message) => message.role === "user").length,
     sources: currentSources.length,
@@ -269,7 +286,7 @@ export function ChatWorkspace() {
     }
     setInput("");
     setMobileTab("chat");
-    void chat.sendMessage(query);
+    void chat.sendMessage(query, selectedKnowledgeBase);
   }
 
   function changeWorkspaceView(view: WorkspaceView) {
@@ -285,6 +302,10 @@ export function ChatWorkspace() {
 
   function openStoredSession(nextSessionId: string) {
     chat.openSession(nextSessionId);
+    const session = chat.sessions.find((item) => item.id === nextSessionId);
+    if (session?.knowledgeBaseId) {
+      setSelectedKnowledgeBaseId(session.knowledgeBaseId);
+    }
     setWorkspaceView("chat");
     setSidebarOpen(false);
   }
@@ -349,7 +370,16 @@ export function ChatWorkspace() {
             onExpandSidebar={() => setSidebarCollapsed(false)}
           />
 
-          {workspaceView === "knowledge" && auth.isAdmin ? <KnowledgeAdminWorkspace /> : null}
+          {workspaceView === "knowledge" && auth.isAdmin ? (
+            <KnowledgeAdminWorkspace
+              knowledgeBases={knowledgeBases}
+              selectedKnowledgeBaseId={selectedKnowledgeBase.id}
+              notice={knowledgeNotice}
+              onNotice={setKnowledgeNotice}
+              onRefresh={refreshKnowledgeBases}
+              onSelect={setSelectedKnowledgeBaseId}
+            />
+          ) : null}
           {workspaceView === "quality" && auth.isAdmin ? <QualityAnalyticsWorkspace feedbackStats={feedbackStats} /> : null}
           {workspaceView === "chat" || !auth.isAdmin ? (
             <ChatWorkspaceView
@@ -358,11 +388,14 @@ export function ChatWorkspace() {
               mobileTab={mobileTab}
               stats={stats}
               currentSources={currentSources}
+              knowledgeBases={knowledgeBases}
+              selectedKnowledgeBase={selectedKnowledgeBase}
               latestMetadata={latestMetadata}
               feedbackStats={feedbackStats}
               copiedAnswerId={copiedAnswerId}
               onInput={setInput}
               onMobileTab={setMobileTab}
+              onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
               onSubmit={onSubmit}
               onCopyAnswer={(message) => void copyAnswer(message)}
               onFeedback={submitFeedback}
@@ -381,11 +414,14 @@ function ChatWorkspaceView({
   mobileTab,
   stats,
   currentSources,
+  knowledgeBases,
+  selectedKnowledgeBase,
   latestMetadata,
   feedbackStats,
   copiedAnswerId,
   onInput,
   onMobileTab,
+  onSelectKnowledgeBase,
   onSubmit,
   onCopyAnswer,
   onFeedback,
@@ -401,6 +437,8 @@ function ChatWorkspaceView({
     boundary?: boolean;
   };
   currentSources: Source[];
+  knowledgeBases: KnowledgeBase[];
+  selectedKnowledgeBase: KnowledgeBase;
   latestMetadata: {
     rewritten_query?: string;
     boundary?: { is_in_scope: boolean; probability: number; reason: string };
@@ -411,6 +449,7 @@ function ChatWorkspaceView({
   copiedAnswerId: string | null;
   onInput: (value: string) => void;
   onMobileTab: (tab: MobileTab) => void;
+  onSelectKnowledgeBase: (knowledgeBaseId: string) => void;
   onSubmit: (event: FormEvent) => void;
   onCopyAnswer: (message: ChatMessage) => void;
   onFeedback: (message: ChatMessage, rating: FeedbackRating) => void;
@@ -428,10 +467,15 @@ function ChatWorkspaceView({
               <StatusBadge status={chat.status} />
             </div>
             <p className="mt-1 truncate text-xs text-[var(--muted)]">
-              Session {chat.sessionId || "initializing"} · 可追溯引用与边界熔断
+              会话 {chat.sessionId || "准备中"} · 可追溯引用与边界熔断
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <KnowledgeBaseSelect
+              knowledgeBases={knowledgeBases}
+              selectedId={selectedKnowledgeBase.id}
+              onSelect={onSelectKnowledgeBase}
+            />
             {chat.status === "streaming" ? (
               <Button type="button" variant="danger" size="sm" onClick={chat.stop}>
                 <Square size={14} aria-hidden="true" />
@@ -476,7 +520,7 @@ function ChatWorkspaceView({
       </section>
 
       <aside className="hidden min-h-0 min-w-0 gap-4 overflow-hidden lg:grid lg:grid-rows-[minmax(0,1fr)_196px]">
-        <SourcePanel sources={currentSources} />
+        <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} />
         <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} />
       </aside>
 
@@ -502,93 +546,328 @@ function ChatWorkspaceView({
             );
           })}
         </div>
-        {mobileTab === "sources" ? <SourcePanel sources={currentSources} /> : null}
+        {mobileTab === "sources" ? <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} /> : null}
         {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} /> : null}
       </section>
     </div>
   );
 }
 
-function KnowledgeAdminWorkspace() {
+function KnowledgeAdminWorkspace({
+  knowledgeBases,
+  selectedKnowledgeBaseId,
+  notice,
+  onNotice,
+  onRefresh,
+  onSelect,
+}: {
+  knowledgeBases: KnowledgeBase[];
+  selectedKnowledgeBaseId: string;
+  notice: string;
+  onNotice: (notice: string) => void;
+  onRefresh: () => Promise<void>;
+  onSelect: (knowledgeBaseId: string) => void;
+}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; size: number }>>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
   const [indexing, setIndexing] = useState(false);
-  const [notice, setNotice] = useState("知识库已同步，引用与检索状态正常。");
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
+  const selectedKnowledgeBase =
+    knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
 
-  function onFiles(files: FileList | null) {
-    const nextFiles = Array.from(files ?? []).map((file) => ({
-      name: file.name,
-      size: file.size,
-    }));
-    if (nextFiles.length) {
-      setSelectedFiles(nextFiles);
-      setNotice(`${nextFiles.length} 个文件已加入待入库队列。`);
+  const refreshDocuments = useCallback(async () => {
+    if (!selectedKnowledgeBase?.id) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/documents`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("文档列表加载失败。");
+      }
+      setDocuments((await response.json()) as KnowledgeDocument[]);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "文档列表加载失败。");
+    }
+  }, [onNotice, selectedKnowledgeBase?.id]);
+
+  useEffect(() => {
+    void refreshDocuments();
+  }, [refreshDocuments]);
+
+  async function createKnowledgeBase() {
+    const name = newName.trim();
+    if (!name) {
+      onNotice("请输入知识库名称。");
+      return;
+    }
+    try {
+      const response = await fetch("/api/knowledge-bases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: newDescription.trim() }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "知识库创建失败。"));
+      }
+      const created = (await response.json()) as KnowledgeBase;
+      setNewName("");
+      setNewDescription("");
+      onSelect(created.id);
+      onNotice("知识库已创建，可上传资料并构建索引。");
+      await onRefresh();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "知识库创建失败。");
     }
   }
 
-  function runIndexing() {
+  async function onFiles(files: FileList | File[] | null) {
+    const nextFiles = Array.from(files ?? []).filter((file) =>
+      [".md", ".txt"].some((suffix) => file.name.toLowerCase().endsWith(suffix)),
+    );
+    if (!nextFiles.length) {
+      onNotice("请选择 Markdown 或 TXT 文档。");
+      return;
+    }
+    const formData = new FormData();
+    nextFiles.forEach((file) => formData.append("files", file));
+    setUploading(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/documents`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "文档上传失败。"));
+      }
+      onNotice(`${nextFiles.length} 个文档已上传，等待构建索引。`);
+      await onRefresh();
+      await refreshDocuments();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "文档上传失败。");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function runIndexing() {
     setIndexing(true);
-    setNotice("正在刷新知识索引。");
-    window.setTimeout(() => {
+    onNotice("正在构建知识索引。");
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/index-jobs`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "索引任务创建失败。"));
+      }
+      const job = (await response.json()) as IndexJob;
+      onNotice(job.message);
+      await onRefresh();
+      await refreshDocuments();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "索引任务创建失败。");
+    } finally {
       setIndexing(false);
-      setNotice("知识索引已更新，最新资料可用于问答。");
-    }, 1400);
+    }
+  }
+
+  async function toggleKnowledgeBaseStatus() {
+    setSavingStatus(true);
+    const nextStatus = selectedKnowledgeBase.status === "active" ? "disabled" : "active";
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "知识库状态更新失败。"));
+      }
+      onNotice(nextStatus === "active" ? "知识库已启用。" : "知识库已停用。");
+      await onRefresh();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "知识库状态更新失败。");
+    } finally {
+      setSavingStatus(false);
+    }
   }
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid max-w-[1400px] gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mx-auto grid max-w-[1440px] gap-4 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)_360px]">
         <div className="space-y-4">
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f5faf8_100%)] p-5 shadow-[var(--shadow-panel)]">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-              <div className="max-w-2xl">
-                <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
-                  <Database size={14} aria-hidden="true" />
-                  Knowledge Governance
-                </div>
-                <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">知识库治理中心</h1>
-                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                  管理资料入库、索引刷新与引用质量，让团队获得稳定、可信、可追溯的知识问答体验。
-                </p>
-              </div>
-              <Button type="button" variant="primary" onClick={() => fileInputRef.current?.click()}>
-                <UploadCloud size={16} aria-hidden="true" />
-                上传文档
-              </Button>
+            <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
+              <Database size={14} aria-hidden="true" />
+              Knowledge Governance
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".md,.txt,.pdf,.doc,.docx"
-              className="sr-only"
-              onChange={(event) => onFiles(event.target.files)}
-            />
-            <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              <AdminMetric icon={FileText} label="知识源" value={`${KNOWLEDGE_SOURCES.length}`} />
-              <AdminMetric icon={Layers3} label="检索片段" value="105" />
-              <AdminMetric icon={CheckCircle2} label="治理状态" value="正常" />
+            <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">知识库治理中心</h1>
+            <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+              面向管理员的多知识库运维台，支持资料入库、索引构建与熔断器样本治理。
+            </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+              <AdminMetric icon={Database} label="知识库" value={`${knowledgeBases.length}`} />
+              <AdminMetric icon={FileText} label="当前文档" value={`${selectedKnowledgeBase.document_count}`} />
+              <AdminMetric icon={CheckCircle2} label="索引状态" value={indexStatusLabel(selectedKnowledgeBase.index_status)} />
             </div>
           </div>
 
           <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
             <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-semibold">知识源管理</h2>
-                  <p className="text-xs text-[var(--muted)]">资料来源、同步状态与引用质量</p>
-                </div>
-                <Button type="button" variant="secondary" size="sm" onClick={runIndexing} disabled={indexing}>
-                  {indexing ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
-                  刷新索引
+              <h2 className="text-sm font-semibold">知识库列表</h2>
+              <p className="text-xs text-[var(--muted)]">选择当前问答与治理对象</p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {knowledgeBases.map((knowledgeBase) => (
+                  <button
+                    key={knowledgeBase.id}
+                    type="button"
+                    onClick={() => onSelect(knowledgeBase.id)}
+                    className={cn(
+                      "w-full rounded-lg border bg-white px-3 py-3 text-left shadow-sm transition hover:border-[var(--accent)] hover:shadow-md",
+                      knowledgeBase.id === selectedKnowledgeBase.id ? "border-[var(--accent)]" : "border-[var(--border)]",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{knowledgeBase.name}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
+                          {knowledgeBase.description || "暂无描述"}
+                        </p>
+                      </div>
+                      <StatusChip label={indexStatusLabel(knowledgeBase.index_status)} tone={knowledgeBase.index_status === "ready" ? "ok" : "muted"} />
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--muted)]">{knowledgeBase.document_count} 个文档</p>
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">新建知识库</h2>
+              <p className="text-xs text-[var(--muted)]">先创建空间，再上传资料并构建索引</p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <input
+                  value={newName}
+                  onChange={(event) => setNewName(event.target.value)}
+                  placeholder="知识库名称"
+                  className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
+                />
+                <textarea
+                  value={newDescription}
+                  onChange={(event) => setNewDescription(event.target.value)}
+                  placeholder="用途描述"
+                  rows={3}
+                  className="w-full resize-none rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                />
+                <Button type="button" variant="primary" className="w-full justify-center" onClick={createKnowledgeBase}>
+                  <Plus size={15} aria-hidden="true" />
+                  创建知识库
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="space-y-4">
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold">{selectedKnowledgeBase.name}</h2>
+                  <p className="text-xs text-[var(--muted)]">{notice}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void onRefresh()}>
+                    <RefreshCw size={14} aria-hidden="true" />
+                    刷新
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" onClick={runIndexing} disabled={indexing || !documents.length}>
+                    {indexing ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+                    构建索引
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {KNOWLEDGE_SOURCES.map((source) => (
-                  <KnowledgeSourceRow key={source.title} source={source} />
-                ))}
+              <div
+                onDragOver={(event) => event.preventDefault()}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDragging(false);
+                  void onFiles(Array.from(event.dataTransfer.files));
+                }}
+                className={cn(
+                  "rounded-xl border border-dashed bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] p-6 text-center transition hover:border-[var(--accent)]",
+                  dragging ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(0,108,99,0.12)]" : "border-[var(--border-strong)]",
+                )}
+              >
+                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+                  {uploading ? <Loader2 className="animate-spin" size={20} /> : <UploadCloud size={20} />}
+                </div>
+                <p className="text-sm font-semibold">拖拽文档到这里，或点击上传</p>
+                <p className="mt-2 text-xs text-[var(--muted)]">支持 Markdown / TXT，多文件上传后可统一构建索引。</p>
+                <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => fileInputRef.current?.click()}>
+                  选择文档
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".md,.txt"
+                  className="sr-only"
+                  onChange={(event) => {
+                    void onFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {documents.length ? documents.map((document) => (
+                  <div key={document.id} className="rounded-lg border border-[var(--border)] bg-white px-3 py-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{document.title}</p>
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          {document.filename} · {formatFileSize(document.size)}
+                        </p>
+                      </div>
+                      <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+                    </div>
+                  </div>
+                )) : (
+                  <PanelEmpty icon={UploadCloud} title="等待上传资料" description="上传文档后可构建当前知识库的独立索引。" />
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">熔断器训练台</h2>
+              <p className="text-xs text-[var(--muted)]">管理训练样本、候选审核与每库独立应用</p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 md:grid-cols-3">
+                <GovernanceStep icon={PenLine} title="添加条目" description="录入范围内/范围外样本。" />
+                <GovernanceStep icon={Sparkles} title="智能扩充" description="候选样本先进入审核队列。" />
+                <GovernanceStep icon={BrainCircuit} title="训练应用" description="每个知识库独立生效。" />
               </div>
             </CardContent>
           </Card>
@@ -597,22 +876,27 @@ function KnowledgeAdminWorkspace() {
         <aside className="space-y-4">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardHeader>
-              <h2 className="text-sm font-semibold">入库队列</h2>
-              <p className="text-xs text-[var(--muted)]">{notice}</p>
+              <h2 className="text-sm font-semibold">当前状态</h2>
+              <p className="text-xs text-[var(--muted)]">{selectedKnowledgeBase.description || "知识库运维状态"}</p>
             </CardHeader>
             <CardContent>
-              {selectedFiles.length ? (
-                <div className="space-y-2">
-                  {selectedFiles.map((file) => (
-                    <div key={`${file.name}-${file.size}`} className="rounded-lg border border-[var(--border)] bg-white px-3 py-2">
-                      <p className="truncate text-sm font-medium">{file.name}</p>
-                      <p className="mt-1 text-xs text-[var(--muted)]">{formatFileSize(file.size)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <PanelEmpty icon={UploadCloud} title="等待上传资料" description="支持常用文档格式，入库后可刷新索引用于问答。" />
-              )}
+              <div className="space-y-2">
+                <StateRow label="运行状态" value={selectedKnowledgeBase.status === "active" ? "启用" : "停用"} />
+                <StateRow label="索引状态" value={indexStatusLabel(selectedKnowledgeBase.index_status)} />
+                <StateRow label="文档数量" value={`${selectedKnowledgeBase.document_count}`} />
+                <StateRow label="最近更新" value={formatTimestamp(selectedKnowledgeBase.updated_at)} />
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-4 w-full justify-center"
+                onClick={toggleKnowledgeBaseStatus}
+                disabled={savingStatus}
+              >
+                {savingStatus ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
+                {selectedKnowledgeBase.status === "active" ? "停用知识库" : "启用知识库"}
+              </Button>
             </CardContent>
           </Card>
 
@@ -624,10 +908,7 @@ function KnowledgeAdminWorkspace() {
             <CardContent>
               <div className="space-y-2">
                 {GOVERNANCE_CHECKS.map((check) => (
-                  <div key={check.label} className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-white px-3 py-2">
-                    <span className="text-sm text-[var(--muted)]">{check.label}</span>
-                    <span className="font-medium text-[var(--accent-strong)]">{check.value}</span>
-                  </div>
+                  <StateRow key={check.label} label={check.label} value={check.value} />
                 ))}
               </div>
             </CardContent>
@@ -964,7 +1245,9 @@ function ProductSidebar({
                     </span>
                     <span className="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
                       <span>{formatRelativeTime(session.updatedAt)}</span>
-                      <span>{session.turnCount} 轮</span>
+                      <span className="min-w-0 truncate">
+                        {session.knowledgeBaseName ?? `${session.turnCount} 轮`}
+                      </span>
                     </span>
                   </button>
                 )) : (
@@ -1082,7 +1365,7 @@ function ProductHeader({
           <Button type="button" variant="ghost" size="icon" title="帮助">
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
-          <HealthPill ok={healthOk} label={health?.app ?? "backend"} />
+          <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
           <Button type="button" variant="secondary" size="sm" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
@@ -1193,43 +1476,80 @@ function AdminMetric({
   );
 }
 
-function KnowledgeSourceRow({
-  source,
+function KnowledgeBaseSelect({
+  knowledgeBases,
+  selectedId,
+  onSelect,
 }: {
-  source: (typeof KNOWLEDGE_SOURCES)[number];
+  knowledgeBases: KnowledgeBase[];
+  selectedId: string;
+  onSelect: (knowledgeBaseId: string) => void;
 }) {
-  const needsReview = source.status === "待复核";
+  const visibleKnowledgeBases = knowledgeBases.filter((item) => item.status === "active");
+  const options = visibleKnowledgeBases.length ? visibleKnowledgeBases : knowledgeBases;
+
   return (
-    <article className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm transition hover:border-[var(--accent)] hover:shadow-md">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="break-words text-sm font-semibold">{source.title}</h3>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium",
-                needsReview
-                  ? "bg-[var(--warning-soft)] text-[var(--warning)]"
-                  : "bg-[var(--accent-soft)] text-[var(--accent-strong)]",
-              )}
-            >
-              {source.status}
-            </span>
-          </div>
-          <p className="mt-2 text-xs text-[var(--muted)]">
-            {source.owner} · {source.chunks} 个片段 · {source.updatedAt}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-md border border-[var(--border)] bg-[var(--panel-muted)] px-2 py-1 text-xs text-[var(--muted)]">
-            质量 {source.quality}
-          </span>
-          <Button type="button" variant="ghost" size="icon" title="查看详情">
-            <ChevronRight size={15} aria-hidden="true" />
-          </Button>
-        </div>
+    <label className="hidden h-8 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-2 text-xs text-[var(--muted)] shadow-sm sm:flex">
+      <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
+      <select
+        value={selectedId}
+        aria-label="选择知识库"
+        onChange={(event) => onSelect(event.target.value)}
+        className="max-w-[180px] bg-transparent text-xs font-medium text-[var(--foreground)] outline-none"
+      >
+        {options.map((knowledgeBase) => (
+          <option key={knowledgeBase.id} value={knowledgeBase.id}>
+            {knowledgeBase.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function StatusChip({ label, tone = "muted" }: { label: string; tone?: "ok" | "muted" | "warning" }) {
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium",
+        tone === "ok"
+          ? "border-[var(--accent-soft)] bg-[var(--accent-tint)] text-[var(--accent-strong)]"
+          : tone === "warning"
+            ? "border-[var(--warning-soft)] bg-[var(--warning-soft)] text-[var(--warning)]"
+            : "border-[var(--border)] bg-[var(--panel-muted)] text-[var(--muted)]",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function GovernanceStep({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: typeof PenLine;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white/82 p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md">
+      <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+        <Icon size={16} aria-hidden="true" />
       </div>
-    </article>
+      <p className="text-sm font-semibold">{title}</p>
+      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{description}</p>
+    </div>
+  );
+}
+
+function StateRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-white/72 px-3 py-2">
+      <span className="truncate text-xs text-[var(--muted)]">{label}</span>
+      <span className="shrink-0 text-sm font-semibold">{value}</span>
+    </div>
   );
 }
 
@@ -1523,7 +1843,15 @@ function ComposerTool({ icon: Icon, label }: { icon: typeof Layers3; label: stri
   );
 }
 
-function SourcePanel({ sources }: { sources: Source[] }) {
+function SourcePanel({
+  sources,
+  knowledgeBases,
+}: {
+  sources: Source[];
+  knowledgeBases: KnowledgeBase[];
+}) {
+  const nameById = new Map(knowledgeBases.map((knowledgeBase) => [knowledgeBase.id, knowledgeBase.name]));
+
   return (
     <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
       <CardHeader className="shrink-0">
@@ -1564,7 +1892,8 @@ function SourcePanel({ sources }: { sources: Source[] }) {
                       <CopyButton text={source.text} />
                     </div>
                     <p className="mt-1 break-words text-xs text-[var(--muted)]">
-                      {source.chunk_id} · score {source.score.toFixed(3)}
+                      {source.knowledge_base_id ? `${nameById.get(source.knowledge_base_id) ?? "知识库"} · ` : ""}
+                      匹配度 {source.score.toFixed(3)}
                     </p>
                   </div>
                 </div>
@@ -1627,7 +1956,7 @@ function ProcessPanel({
     PROCESS_STAGES.find((stage) => stage.id === activeStage) ?? {
       id: "idle" as const,
       label: "流程待命",
-      description: "提交问题后，系统会按阶段推进检索与生成。",
+      description: "提交问题后，系统会实时推进检索与生成。",
       icon: Sparkles,
     };
   const displayEvent = statusByStage.get(displayStage.id);
@@ -1694,7 +2023,7 @@ function ProcessPanel({
                       : "-"
                   }
                 />
-                <TracePill label="模式" value={metadata.used_llm ? "LLM" : "本地"} />
+                <TracePill label="模式" value={metadata.used_llm ? "增强生成" : "快速生成"} />
                 <TracePill label="反馈" value={feedbackStats.total ? `${feedbackStats.positive}/${feedbackStats.total}` : "-"} />
               </div>
             </div>
@@ -1765,6 +2094,38 @@ function formatFileSize(size: number) {
     return `${(size / 1024).toFixed(1)} KB`;
   }
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function indexStatusLabel(status: KnowledgeBase["index_status"]) {
+  const labels: Record<KnowledgeBase["index_status"], string> = {
+    not_indexed: "待构建",
+    pending: "待索引",
+    building: "构建中",
+    ready: "可问答",
+    failed: "需处理",
+  };
+  return labels[status];
+}
+
+function formatTimestamp(timestamp?: number | null) {
+  if (!timestamp) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(timestamp * 1000);
+}
+
+async function readResponseError(response: Response, fallback: string) {
+  try {
+    const data = (await response.json()) as { detail?: string; error?: string };
+    return data.detail || data.error || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function formatRelativeTime(timestamp: number) {

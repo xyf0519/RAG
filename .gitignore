@@ -6,9 +6,13 @@ __pycache__/
 
 logs/*.out
 logs/*.log
+logs/*.pid
 
 data/index/
+data/knowledge_bases/
+data/ops.sqlite3
 models/boundary_classifier/
+models/knowledge_bases/
 models/huggingface/
 
 web/.next/

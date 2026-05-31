@@ -11,6 +11,7 @@ export type Source = {
   title: string;
   score: number;
   text: string;
+  knowledge_base_id?: string;
 };
 
 export type Boundary = {
@@ -27,11 +28,13 @@ export type Timings = {
 export type ChatRequest = {
   query: string;
   session_id?: string;
+  knowledge_base_id?: string;
 };
 
 export type ChatFinalPayload = {
   answer: string;
   session_id: string;
+  knowledge_base_id?: string;
   rewritten_query: string;
   boundary: Boundary;
   sources: Source[];
@@ -83,6 +86,8 @@ export type ChatMessage = {
   errorCode?: ErrorCode | null;
   favorite?: boolean;
   feedback?: ChatFeedback;
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
 };
 
 export type BackendHealth = {
@@ -93,9 +98,61 @@ export type BackendHealth = {
 export type ChatSessionSummary = {
   id: string;
   title: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
   createdAt: number;
   updatedAt: number;
   turnCount: number;
   sourceCount: number;
   hasFeedback: boolean;
+};
+
+export type KnowledgeBase = {
+  id: string;
+  name: string;
+  description: string;
+  status: "active" | "disabled";
+  document_count: number;
+  index_status: "not_indexed" | "pending" | "building" | "ready" | "failed";
+  last_indexed_at?: number | null;
+  updated_at: number;
+  created_at: number;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  knowledge_base_id: string;
+  filename: string;
+  title: string;
+  size: number;
+  status: string;
+  created_at: number;
+};
+
+export type IndexJob = {
+  id: string;
+  knowledge_base_id: string;
+  status: "running" | "succeeded" | "failed";
+  message: string;
+  created_at: number;
+  finished_at?: number | null;
+};
+
+export type BoundaryDatasetItem = {
+  id: string;
+  knowledge_base_id: string;
+  text: string;
+  label: 0 | 1;
+  source: "manual" | "llm";
+  status: "draft" | "approved";
+  created_at: number;
+};
+
+export type BoundaryTrainingJob = {
+  id: string;
+  knowledge_base_id: string;
+  status: "running" | "succeeded" | "failed";
+  message: string;
+  created_at: number;
+  finished_at?: number | null;
 };

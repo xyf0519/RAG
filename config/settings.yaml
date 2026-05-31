@@ -8,6 +8,9 @@ paths:
   raw_docs_dir: data/raw
   index_dir: data/index
   classifier_dir: models/boundary_classifier
+  knowledge_bases_dir: data/knowledge_bases
+  knowledge_models_dir: models/knowledge_bases
+  ops_db: data/ops.sqlite3
   log_file: logs/xyfrag.log
 
 boundary_classifier:

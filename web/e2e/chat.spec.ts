@@ -7,6 +7,24 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
       body: JSON.stringify({ ok: true, backend: { ok: true, app: "xyfRAG" } }),
     });
   });
+  await page.route("**/api/knowledge-bases", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          id: "kb-default",
+          name: "默认校园资料库",
+          description: "默认知识库",
+          status: "active",
+          document_count: 3,
+          index_status: "ready",
+          last_indexed_at: null,
+          updated_at: Date.now() / 1000,
+          created_at: Date.now() / 1000,
+        },
+      ]),
+    });
+  });
   await page.route("**/api/chat", async (route) => {
     const events = [
       { type: "status", payload: { stage: "boundary", message: "正在判断问题范围" } },
@@ -18,6 +36,7 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
         payload: {
           answer: "请在开学前两周提交补考申请。[1]",
           session_id: "demo",
+          knowledge_base_id: "kb-default",
           rewritten_query: "补考申请时间",
           boundary: { is_in_scope: true, probability: 0.92, reason: "classified" },
           sources: [
@@ -28,6 +47,7 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
               title: "补考",
               score: 0.9,
               text: "补考申请应在开学前两周提交。",
+              knowledge_base_id: "kb-default",
             },
           ],
           used_llm: false,

@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   ChatSessionSummary,
   ChatStatusPayload,
+  KnowledgeBase,
   Source,
 } from "@/shared/types/chat";
 
@@ -30,6 +31,7 @@ export function useRagChatStream() {
   const [activeFinal, setActiveFinal] = useState<ChatFinalPayload | null>(null);
   const [lastError, setLastError] = useState<ChatErrorPayload | null>(null);
   const [lastQuery, setLastQuery] = useState("");
+  const [lastKnowledgeBase, setLastKnowledgeBase] = useState<Pick<KnowledgeBase, "id" | "name"> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export function useRagChatStream() {
   }, [messages, sessionId]);
 
   const sendMessage = useCallback(
-    async (query: string) => {
+    async (query: string, knowledgeBase?: Pick<KnowledgeBase, "id" | "name">) => {
       const trimmed = query.trim();
       if (!trimmed || status === "streaming") {
         return;
@@ -102,6 +104,8 @@ export function useRagChatStream() {
         role: "user",
         content: trimmed,
         createdAt: Date.now(),
+        knowledgeBaseId: knowledgeBase?.id,
+        knowledgeBaseName: knowledgeBase?.name,
       };
       const assistantId = createId("assistant");
       const assistantMessage: ChatMessage = {
@@ -109,9 +113,12 @@ export function useRagChatStream() {
         role: "assistant",
         content: "",
         createdAt: Date.now(),
+        knowledgeBaseId: knowledgeBase?.id,
+        knowledgeBaseName: knowledgeBase?.name,
       };
 
       setLastQuery(trimmed);
+      setLastKnowledgeBase(knowledgeBase ?? null);
       setLastError(null);
       setActiveFinal(null);
       setActiveSources([]);
@@ -126,7 +133,11 @@ export function useRagChatStream() {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: trimmed, session_id: sessionId || undefined }),
+          body: JSON.stringify({
+            query: trimmed,
+            session_id: sessionId || undefined,
+            knowledge_base_id: knowledgeBase?.id,
+          }),
           signal: controller.signal,
         });
 
@@ -187,6 +198,8 @@ export function useRagChatStream() {
                       rewrittenQuery: event.payload.rewritten_query,
                       timings: event.payload.timings,
                       errorCode: event.payload.error_code,
+                      knowledgeBaseId: event.payload.knowledge_base_id ?? knowledgeBase?.id,
+                      knowledgeBaseName: knowledgeBase?.name,
                     }
                   : message,
               ),
@@ -233,9 +246,9 @@ export function useRagChatStream() {
 
   const retry = useCallback(() => {
     if (lastQuery) {
-      void sendMessage(lastQuery);
+      void sendMessage(lastQuery, lastKnowledgeBase ?? undefined);
     }
-  }, [lastQuery, sendMessage]);
+  }, [lastKnowledgeBase, lastQuery, sendMessage]);
 
   const newSession = useCallback(() => {
     abortRef.current?.abort();
@@ -341,6 +354,8 @@ function buildSessionSummary(sessionId: string, messages: ChatMessage[]): ChatSe
   return {
     id: sessionId,
     title: firstUserMessage?.content || "新的知识库问答",
+    knowledgeBaseId: firstUserMessage?.knowledgeBaseId,
+    knowledgeBaseName: firstUserMessage?.knowledgeBaseName,
     createdAt: messages[0]?.createdAt ?? Date.now(),
     updatedAt,
     turnCount: messages.filter((message) => message.role === "user").length,

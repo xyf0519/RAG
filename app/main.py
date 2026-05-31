@@ -9,12 +9,18 @@ from collections.abc import AsyncIterator
 from typing import Any, Optional, Union
 from uuid import uuid4
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from xyfrag.config import get_settings
-from xyfrag.index import KnowledgeIndex, build_index
+from xyfrag.knowledge_base import (
+    DEFAULT_KNOWLEDGE_BASE_ID,
+    IndexJobRecord,
+    KnowledgeBaseRecord,
+    KnowledgeBaseStore,
+    KnowledgeDocumentRecord,
+)
 from xyfrag.logging_config import configure_logging
 from xyfrag.service import RAGService
 from xyfrag.session import InMemorySessionStore
@@ -27,6 +33,7 @@ class ChatRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=2000)
     session_id: Optional[str] = None
+    knowledge_base_id: Optional[str] = None
 
 
 class SourceResponse(BaseModel):
@@ -38,6 +45,7 @@ class SourceResponse(BaseModel):
     title: str
     score: float
     text: str
+    knowledge_base_id: Optional[str] = None
 
 
 class BoundaryResponse(BaseModel):
@@ -62,6 +70,7 @@ class ChatResponse(BaseModel):
     total_elapsed_seconds: float
     error_code: Optional[str] = None
     error: Optional[str] = None
+    knowledge_base_id: str = DEFAULT_KNOWLEDGE_BASE_ID
 
 
 class HealthResponse(BaseModel):
@@ -79,32 +88,91 @@ class ErrorResponse(BaseModel):
     error_code: str = "BACKEND_UNAVAILABLE"
 
 
-def _load_or_build_index() -> KnowledgeIndex:
-    """Load the retrieval index, building it from raw docs when missing.
+class KnowledgeBaseCreateRequest(BaseModel):
+    """Create a local knowledge base."""
+
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=300)
+
+
+class KnowledgeBaseUpdateRequest(BaseModel):
+    """Update knowledge-base metadata."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=300)
+    status: Optional[str] = None
+
+
+class KnowledgeBaseResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    status: str
+    document_count: int
+    index_status: str
+    last_indexed_at: Optional[float] = None
+    updated_at: float
+    created_at: float
+
+
+class KnowledgeDocumentResponse(BaseModel):
+    id: str
+    knowledge_base_id: str
+    filename: str
+    title: str
+    size: int
+    status: str
+    created_at: float
+
+
+class IndexJobResponse(BaseModel):
+    id: str
+    knowledge_base_id: str
+    status: str
+    message: str
+    created_at: float
+    finished_at: Optional[float] = None
+
+
+def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
+    """Return a RAG service scoped to one knowledge base.
 
     Args:
-        None.
+        app: FastAPI application.
+        knowledge_base_id: Optional knowledge-base id.
 
     Returns:
-        Loaded knowledge index.
-
-    Raises:
-        RuntimeError: If loading and building both fail.
+        RAG service for the requested knowledge base.
     """
 
-    settings = get_settings()
     try:
-        return KnowledgeIndex.load(settings.paths.index_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.info("Index unavailable, building from raw docs: %s", exc)
+        knowledge_base = app.state.knowledge_store.require_knowledge_base(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
 
-    try:
-        index = build_index(settings)
-        index.save(settings.paths.index_dir)
-        return index
-    except Exception as exc:
-        logger.error("Unable to build retrieval index: %s", exc)
-        raise RuntimeError("检索索引初始化失败，请检查知识库文档。") from exc
+    if knowledge_base.status != "active":
+        raise HTTPException(status_code=409, detail="知识库已停用。")
+    if knowledge_base.index_status != "ready":
+        raise HTTPException(status_code=409, detail="知识库尚未完成索引构建。")
+
+    services: dict[str, RAGService] = app.state.rag_services
+    if knowledge_base.id not in services:
+        store: KnowledgeBaseStore = app.state.knowledge_store
+        try:
+            knowledge_index = store.load_index(knowledge_base.id)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="知识库尚未完成索引构建。") from exc
+        services[knowledge_base.id] = RAGService(
+            settings=store.settings_for(knowledge_base.id),
+            knowledge_index=knowledge_index,
+            sessions=app.state.sessions,
+        )
+    return services[knowledge_base.id]
+
+
+def _invalidate_service(app: FastAPI, knowledge_base_id: str) -> None:
+    services: dict[str, RAGService] = app.state.rag_services
+    services.pop(knowledge_base_id, None)
 
 
 @asynccontextmanager
@@ -120,13 +188,9 @@ async def lifespan(app: FastAPI) -> Any:
 
     settings = get_settings()
     configure_logging(settings)
-    knowledge_index = _load_or_build_index()
     app.state.sessions = InMemorySessionStore()
-    app.state.rag_service = RAGService(
-        settings=settings,
-        knowledge_index=knowledge_index,
-        sessions=app.state.sessions,
-    )
+    app.state.knowledge_store = KnowledgeBaseStore(settings)
+    app.state.rag_services = {}
     yield
 
 
@@ -164,7 +228,8 @@ async def chat(
 
     session_id = request.session_id or str(uuid4())
     request_id = x_request_id or str(uuid4())
-    service: RAGService = app.state.rag_service
+    service = _service_for_knowledge_base(app, request.knowledge_base_id)
+    knowledge_base = app.state.knowledge_store.require_knowledge_base(request.knowledge_base_id)
 
     try:
         result = await service.chat(
@@ -200,6 +265,7 @@ async def chat(
                 title=source.title,
                 score=source.score,
                 text=source.text,
+                knowledge_base_id=knowledge_base.id,
             )
             for source in result.sources
         ],
@@ -208,6 +274,7 @@ async def chat(
         total_elapsed_seconds=result.total_elapsed_seconds,
         error_code=result.error_code,
         error=result.error,
+        knowledge_base_id=knowledge_base.id,
     )
 
 
@@ -228,7 +295,8 @@ async def chat_stream(
 
     session_id = request.session_id or str(uuid4())
     request_id = x_request_id or str(uuid4())
-    service: RAGService = app.state.rag_service
+    service = _service_for_knowledge_base(app, request.knowledge_base_id)
+    knowledge_base = app.state.knowledge_store.require_knowledge_base(request.knowledge_base_id)
 
     async def events() -> AsyncIterator[str]:
         try:
@@ -237,8 +305,21 @@ async def chat_stream(
                 query=request.query.strip(),
                 request_id=request_id,
             ):
+                payload = dict(event.payload)
+                if event.type == "final":
+                    payload["knowledge_base_id"] = knowledge_base.id
+                    payload["sources"] = [
+                        {
+                            **source,
+                            "knowledge_base_id": knowledge_base.id,
+                        }
+                        for source in payload.get("sources", [])
+                    ]
                 yield json.dumps(
-                    {"type": event.type, "payload": event.payload},
+                    {
+                        "type": event.type,
+                        "payload": payload,
+                    },
                     ensure_ascii=False,
                 ) + "\n"
         except Exception as exc:
@@ -269,6 +350,110 @@ async def chat_stream(
     )
 
 
+@app.get("/api/v1/knowledge-bases", response_model=list[KnowledgeBaseResponse])
+async def list_knowledge_bases() -> list[KnowledgeBaseResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    return [_kb_response(item) for item in store.list_knowledge_bases()]
+
+
+@app.post("/api/v1/knowledge-bases", response_model=KnowledgeBaseResponse)
+async def create_knowledge_base(
+    request: KnowledgeBaseCreateRequest,
+) -> KnowledgeBaseResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        knowledge_base = store.create_knowledge_base(request.name, request.description)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _kb_response(knowledge_base)
+
+
+@app.patch("/api/v1/knowledge-bases/{knowledge_base_id}", response_model=KnowledgeBaseResponse)
+async def update_knowledge_base(
+    knowledge_base_id: str,
+    request: KnowledgeBaseUpdateRequest,
+) -> KnowledgeBaseResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    if request.status is not None and request.status not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="知识库状态不正确。")
+    try:
+        knowledge_base = store.update_knowledge_base(
+            knowledge_base_id,
+            name=request.name,
+            description=request.description,
+            status=request.status,  # type: ignore[arg-type]
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    _invalidate_service(app, knowledge_base_id)
+    return _kb_response(knowledge_base)
+
+
+@app.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+    response_model=list[KnowledgeDocumentResponse],
+)
+async def list_documents(knowledge_base_id: str) -> list[KnowledgeDocumentResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        return [_document_response(item) for item in store.list_documents(knowledge_base_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+
+
+@app.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+    response_model=list[KnowledgeDocumentResponse],
+)
+async def upload_documents(
+    knowledge_base_id: str,
+    files: list[UploadFile] = File(...),
+) -> list[KnowledgeDocumentResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    documents: list[KnowledgeDocumentResponse] = []
+    try:
+        for file in files:
+            content = await file.read()
+            documents.append(
+                _document_response(
+                    store.add_document(
+                        knowledge_base_id,
+                        file.filename or "document.txt",
+                        content,
+                    )
+                )
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_service(app, knowledge_base_id)
+    return documents
+
+
+@app.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/index-jobs",
+    response_model=IndexJobResponse,
+)
+async def create_index_job(knowledge_base_id: str) -> IndexJobResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        job = store.create_index_job(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    _invalidate_service(app, knowledge_base_id)
+    return _job_response(job)
+
+
+@app.get("/api/v1/jobs/{job_id}", response_model=IndexJobResponse)
+async def get_job(job_id: str) -> IndexJobResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    return _job_response(job)
+
+
 @app.delete("/sessions/{session_id}", response_model=dict[str, bool])
 async def clear_session(session_id: str) -> dict[str, bool]:
     """Clear one chat session.
@@ -283,3 +468,15 @@ async def clear_session(session_id: str) -> dict[str, bool]:
     sessions: InMemorySessionStore = app.state.sessions
     sessions.clear(session_id)
     return {"ok": True}
+
+
+def _kb_response(record: KnowledgeBaseRecord) -> KnowledgeBaseResponse:
+    return KnowledgeBaseResponse(**record.__dict__)
+
+
+def _document_response(record: KnowledgeDocumentRecord) -> KnowledgeDocumentResponse:
+    return KnowledgeDocumentResponse(**record.__dict__)
+
+
+def _job_response(record: IndexJobRecord) -> IndexJobResponse:
+    return IndexJobResponse(**record.__dict__)

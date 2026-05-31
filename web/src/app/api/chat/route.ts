@@ -76,6 +76,8 @@ async function parsePayload(
 
   const query = typeof body.query === "string" ? body.query.trim() : "";
   const sessionId = typeof body.session_id === "string" ? body.session_id : undefined;
+  const knowledgeBaseId =
+    typeof body.knowledge_base_id === "string" ? body.knowledge_base_id : undefined;
   if (!query) {
     return { ok: false, message: "请输入问题后再发送。" };
   }
@@ -83,7 +85,14 @@ async function parsePayload(
     return { ok: false, message: "问题太长，请控制在 2000 字以内。" };
   }
 
-  return { ok: true, data: { query, session_id: sessionId } };
+  return {
+    ok: true,
+    data: {
+      query,
+      session_id: sessionId,
+      knowledge_base_id: knowledgeBaseId,
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
