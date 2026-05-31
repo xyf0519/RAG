@@ -42,6 +42,24 @@ describe("ChatWorkspace", () => {
             },
           ]);
         }
+        if (url.includes("/classifier-models")) {
+          return jsonResponse([
+            {
+              id: "model-1",
+              knowledge_base_id: "kb-default",
+              name: "边界范围模型",
+              scope: "knowledge_base",
+              alias: "应用版",
+              version: 1,
+              status: "ready",
+              artifact_path: "models/kb-default/boundary_classifier/classifier.joblib",
+              metrics_json: "{\"accuracy\":1,\"sample_count\":4}",
+              job_id: "classifier-1",
+              created_at: Date.now() / 1000,
+              activated_at: Date.now() / 1000,
+            },
+          ]);
+        }
         if (url.includes("/boundary-items")) {
           return jsonResponse([
             {
@@ -167,6 +185,13 @@ describe("ChatWorkspace", () => {
     expect(await screen.findByRole("heading", { name: "边界训练" })).toBeInTheDocument();
     expect(screen.getByText("手动添加")).toBeInTheDocument();
     expect(screen.getByText("智能扩充")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /训练并应用/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("模型名称")).toBeInTheDocument();
+
+    fireEvent.doubleClick(screen.getByRole("button", { name: /校园卡丢了怎么办/ }));
+
+    expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除样本" })).toBeInTheDocument();
   });
 
   it("opens the admin quality analytics workspace", () => {

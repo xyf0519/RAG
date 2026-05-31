@@ -107,6 +107,29 @@ def test_boundary_item_endpoints() -> None:
         assert update_response.status_code == 200
         assert update_response.json()["label"] == 0
 
+        for text, label in [
+            ("校园卡补办需要哪些材料？", 1),
+            ("校园卡可以在哪些食堂使用？", 1),
+            ("推荐附近餐厅。", 0),
+            ("讲一个睡前故事。", 0),
+        ]:
+            sample_response = client.post(
+                "/api/v1/knowledge-bases/kb-default/boundary-items",
+                json={"text": text, "label": label},
+            )
+            assert sample_response.status_code == 200
+
+        classifier_response = client.post(
+            "/api/v1/knowledge-bases/kb-default/classifier-jobs",
+            json={"model_name": "边界范围模型", "model_alias": "应用版"},
+        )
+        assert classifier_response.status_code == 200
+        assert classifier_response.json()["status"] == "succeeded"
+
+        model_response = client.get("/api/v1/knowledge-bases/kb-default/classifier-models")
+        assert model_response.status_code == 200
+        assert model_response.json()[0]["name"] == "边界范围模型"
+
         generate_response = client.post(
             "/api/v1/knowledge-bases/kb-default/boundary-items/generate",
             json={"count": 4, "label_hint": "校园卡"},

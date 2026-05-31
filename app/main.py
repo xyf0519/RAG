@@ -7,7 +7,7 @@ import json
 import re
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from xyfrag.config import get_settings
 from xyfrag.knowledge_base import (
     BoundaryDatasetItemRecord,
+    ClassifierModelRecord,
     DEFAULT_KNOWLEDGE_BASE_ID,
     IndexJobRecord,
     KnowledgeBaseRecord,
@@ -135,6 +136,27 @@ class IndexJobResponse(BaseModel):
     message: str
     created_at: float
     finished_at: Optional[float] = None
+
+
+class ClassifierJobCreateRequest(BaseModel):
+    model_name: str = Field(default="边界范围模型", min_length=1, max_length=120)
+    model_scope: Literal["global", "knowledge_base", "session"] = "knowledge_base"
+    model_alias: str = Field(default="应用版", min_length=1, max_length=64)
+
+
+class ClassifierModelResponse(BaseModel):
+    id: str
+    knowledge_base_id: str
+    name: str
+    scope: str
+    alias: str
+    version: int
+    status: str
+    artifact_path: str
+    metrics_json: str
+    job_id: str
+    created_at: float
+    activated_at: Optional[float] = None
 
 
 class BoundaryDatasetItemCreateRequest(BaseModel):
@@ -483,6 +505,41 @@ async def get_job(job_id: str) -> IndexJobResponse:
     return _job_response(job)
 
 
+@app.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/classifier-jobs",
+    response_model=IndexJobResponse,
+)
+async def create_classifier_job(
+    knowledge_base_id: str,
+    request: ClassifierJobCreateRequest = ClassifierJobCreateRequest(),
+) -> IndexJobResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        job = store.create_classifier_job(
+            knowledge_base_id,
+            model_name=request.model_name,
+            model_scope=request.model_scope,
+            model_alias=request.model_alias,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    if job.status == "succeeded":
+        _invalidate_service(app, knowledge_base_id)
+    return _job_response(job)
+
+
+@app.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/classifier-models",
+    response_model=list[ClassifierModelResponse],
+)
+async def list_classifier_models(knowledge_base_id: str) -> list[ClassifierModelResponse]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        return [_classifier_model_response(item) for item in store.list_classifier_models(knowledge_base_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+
+
 @app.get(
     "/api/v1/knowledge-bases/{knowledge_base_id}/boundary-items",
     response_model=list[BoundaryDatasetItemResponse],
@@ -623,6 +680,10 @@ def _boundary_item_response(
     record: BoundaryDatasetItemRecord,
 ) -> BoundaryDatasetItemResponse:
     return BoundaryDatasetItemResponse(**record.__dict__)
+
+
+def _classifier_model_response(record: ClassifierModelRecord) -> ClassifierModelResponse:
+    return ClassifierModelResponse(**record.__dict__)
 
 
 async def _generate_boundary_sample_candidates(

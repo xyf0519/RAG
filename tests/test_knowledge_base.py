@@ -82,6 +82,32 @@ def test_store_boundary_items_crud(tmp_path: Path) -> None:
     assert store.list_boundary_items(knowledge_base.id) == []
 
 
+def test_store_trains_boundary_classifier_model(tmp_path: Path) -> None:
+    store = KnowledgeBaseStore(make_settings(tmp_path))
+    knowledge_base = store.create_knowledge_base("边界样本库", "边界训练")
+
+    for text, label in [
+        ("校园卡丢了怎么办？", 1),
+        ("校园卡补办需要哪些材料？", 1),
+        ("推荐附近餐厅。", 0),
+        ("讲一个睡前故事。", 0),
+    ]:
+        store.add_boundary_item(knowledge_base.id, text, label)
+
+    job = store.create_classifier_job(
+        knowledge_base.id,
+        model_name="边界范围模型",
+        model_alias="应用版",
+    )
+
+    assert job.status == "succeeded"
+    assert (store.classifier_dir(knowledge_base.id) / "classifier.joblib").exists()
+    models = store.list_classifier_models(knowledge_base.id)
+    assert len(models) == 1
+    assert models[0].name == "边界范围模型"
+    assert models[0].status == "ready"
+
+
 def test_store_rejects_unsupported_or_empty_documents(tmp_path: Path) -> None:
     store = KnowledgeBaseStore(make_settings(tmp_path))
     knowledge_base = store.create_knowledge_base("规章制度")

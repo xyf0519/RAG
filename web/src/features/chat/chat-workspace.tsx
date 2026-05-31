@@ -56,6 +56,7 @@ import type {
   ChatStatusPayload,
   FeedbackRating,
   BoundaryDatasetItem,
+  ClassifierModel,
   IndexJob,
   KnowledgeBase,
   KnowledgeDocument,
@@ -113,7 +114,7 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
 };
 
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
-const BOUNDARY_VISUAL_SRC = "/images/boundary-network-visual.png";
+const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 
 const QUALITY_REVIEWS = [
   {
@@ -578,6 +579,8 @@ function KnowledgeAddWorkspace({
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [classifierModels, setClassifierModels] = useState<ClassifierModel[]>([]);
+  const [selectedClassifierModelId, setSelectedClassifierModelId] = useState<string>("");
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [indexing, setIndexing] = useState(false);
@@ -588,6 +591,9 @@ function KnowledgeAddWorkspace({
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const visibleKnowledgeBases = knowledgeBases.slice(0, 5);
   const visibleDocuments = documents.slice(0, 4);
+  const selectedClassifierModel =
+    classifierModels.find((model) => model.id === selectedClassifierModelId) ?? classifierModels[0] ?? null;
+  const selectedClassifierMetrics = parseClassifierModelMetrics(selectedClassifierModel?.metrics_json);
 
   const refreshDocuments = useCallback(async () => {
     if (!selectedKnowledgeBase?.id) {
@@ -606,9 +612,34 @@ function KnowledgeAddWorkspace({
     }
   }, [onNotice, selectedKnowledgeBase?.id]);
 
+  const refreshClassifierModels = useCallback(async () => {
+    if (!selectedKnowledgeBase?.id) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/classifier-models`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "模型列表加载失败。"));
+      }
+      const models = (await response.json()) as ClassifierModel[];
+      setClassifierModels(models);
+      setSelectedClassifierModelId((current) => (models.some((model) => model.id === current) ? current : models[0]?.id ?? ""));
+    } catch (error) {
+      setClassifierModels([]);
+      setSelectedClassifierModelId("");
+      onNotice(error instanceof Error ? error.message : "模型列表加载失败。");
+    }
+  }, [onNotice, selectedKnowledgeBase?.id]);
+
   useEffect(() => {
     void refreshDocuments();
   }, [refreshDocuments]);
+
+  useEffect(() => {
+    void refreshClassifierModels();
+  }, [refreshClassifierModels]);
 
   async function createKnowledgeBase() {
     const name = newName.trim();
@@ -883,15 +914,65 @@ function KnowledgeAddWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardContent className="p-4">
-              <Image
-                src={KNOWLEDGE_VISUAL_SRC}
-                alt="知识库视觉"
-                width={480}
-                height={180}
-                className="h-32 w-full rounded-xl object-cover"
-              />
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader>
+              <h2 className="text-sm font-semibold">边界模型</h2>
+              <p className="text-xs text-[var(--muted)]">当前知识库的可用版本</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {classifierModels.length ? (
+                <>
+                  <label className="block text-xs font-medium text-[var(--muted)]" htmlFor="knowledge-model-select">
+                    当前模型
+                  </label>
+                  <select
+                    id="knowledge-model-select"
+                    value={selectedClassifierModel?.id ?? ""}
+                    onChange={(event) => setSelectedClassifierModelId(event.target.value)}
+                    className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)]"
+                  >
+                    {classifierModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name} · v{model.version}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedClassifierModel ? (
+                    <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-4 shadow-sm">
+                      <div className="relative flex items-center gap-3">
+                        <div className="boundary-model-orb flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
+                          <BrainCircuit size={17} aria-hidden="true" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{selectedClassifierModel.name}</p>
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            {classifierScopeLabel(selectedClassifierModel.scope)} · {classifierStatusLabel(selectedClassifierModel.status)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="relative mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <StateRow label="准确率" value={formatMetricPercent(selectedClassifierMetrics.accuracy)} />
+                        <StateRow label="样本" value={`${selectedClassifierMetrics.sample_count ?? "-"}`} />
+                      </div>
+                      <div className="relative mt-3 flex flex-wrap gap-1.5">
+                        <span className="rounded-full border border-[var(--accent-soft)] bg-white/80 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-strong)]">
+                          @{selectedClassifierModel.alias}
+                        </span>
+                        <span className="rounded-full border border-[var(--border)] bg-white/80 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                          {formatTimestamp(selectedClassifierModel.created_at)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--panel-muted)] p-4 text-sm text-[var(--muted)]">
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--accent-strong)] shadow-sm">
+                    <BrainCircuit size={16} aria-hidden="true" />
+                  </div>
+                  暂无可用模型。完成一次边界训练后会显示在这里。
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -922,21 +1003,32 @@ function BoundaryTrainingWorkspace({
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const [items, setItems] = useState<BoundaryDatasetItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [manualText, setManualText] = useState("");
   const [manualLabel, setManualLabel] = useState<0 | 1>(1);
   const [editText, setEditText] = useState("");
   const [editLabel, setEditLabel] = useState<0 | 1>(1);
+  const [modelName, setModelName] = useState("边界范围模型");
+  const [modelScope, setModelScope] = useState<"global" | "knowledge_base" | "session">("knowledge_base");
+  const [modelAlias, setModelAlias] = useState("应用版");
+  const [trainingJob, setTrainingJob] = useState<IndexJob | null>(null);
   const [aiCount, setAiCount] = useState(8);
   const [aiHint, setAiHint] = useState("");
   const [notice, setNotice] = useState("样本用于识别可回答范围。");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [bulkApproving, setBulkApproving] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [training, setTraining] = useState(false);
   const [swipedItemId, setSwipedItemId] = useState<string | null>(null);
   const pointerStartRef = useRef<{ id: string; x: number } | null>(null);
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0] ?? null;
+  const editingItem = items.find((item) => item.id === editingItemId) ?? null;
   const approvedCount = items.filter((item) => item.status === "approved").length;
   const draftCount = items.filter((item) => item.status === "draft").length;
+  const approvedInScopeCount = items.filter((item) => item.status === "approved" && item.label === 1).length;
+  const approvedOutOfScopeCount = items.filter((item) => item.status === "approved" && item.label === 0).length;
+  const draftItems = items.filter((item) => item.status === "draft");
 
   const refreshItems = useCallback(async () => {
     if (!selectedKnowledgeBase.id) {
@@ -966,14 +1058,14 @@ function BoundaryTrainingWorkspace({
   }, [refreshItems]);
 
   useEffect(() => {
-    if (selectedItem) {
-      setEditText(selectedItem.text);
-      setEditLabel(selectedItem.label);
+    if (editingItem) {
+      setEditText(editingItem.text);
+      setEditLabel(editingItem.label);
     } else {
       setEditText("");
       setEditLabel(1);
     }
-  }, [selectedItem?.id, selectedItem?.label, selectedItem?.text]);
+  }, [editingItem?.id, editingItem?.label, editingItem?.text]);
 
   async function createManualItem() {
     const text = manualText.trim();
@@ -1004,7 +1096,7 @@ function BoundaryTrainingWorkspace({
   }
 
   async function saveSelectedItem() {
-    if (!selectedItem) {
+    if (!editingItem) {
       return;
     }
     const text = editText.trim();
@@ -1014,7 +1106,7 @@ function BoundaryTrainingWorkspace({
     }
     setSaving(true);
     try {
-      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/${selectedItem.id}`, {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/${editingItem.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, label: editLabel, status: "approved" }),
@@ -1024,6 +1116,8 @@ function BoundaryTrainingWorkspace({
       }
       const updated = (await response.json()) as BoundaryDatasetItem;
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setSelectedItemId(updated.id);
+      setEditingItemId(null);
       setNotice("样本已保存。");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "样本保存失败。");
@@ -1069,6 +1163,9 @@ function BoundaryTrainingWorkspace({
         }
         return nextItems;
       });
+      if (editingItemId === itemId) {
+        setEditingItemId(null);
+      }
       setSwipedItemId(null);
       setNotice("样本已删除。");
     } catch (error) {
@@ -1076,12 +1173,120 @@ function BoundaryTrainingWorkspace({
     }
   }
 
-  const visibleItems = items.slice(0, 8);
+  const bulkApproveDraftItems = useCallback(async () => {
+    if (!draftItems.length) {
+      setNotice("当前没有待确认样本。");
+      return;
+    }
+    setBulkApproving(true);
+    setNotice(`正在确认 ${draftItems.length} 条待审样本。`);
+    try {
+      const updatedItems = await Promise.all(
+        draftItems.map(async (item) => {
+          const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/boundary-items/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: item.text, label: item.label, status: "approved" }),
+          });
+          if (!response.ok) {
+            throw new Error(await readResponseError(response, "批量确认失败。"));
+          }
+          return (await response.json()) as BoundaryDatasetItem;
+        }),
+      );
+      const updatedById = new Map(updatedItems.map((item) => [item.id, item]));
+      setItems((current) => current.map((item) => updatedById.get(item.id) ?? item));
+      setEditingItemId(null);
+      setNotice(`已批量确认 ${updatedItems.length} 条样本。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "批量确认失败。");
+    } finally {
+      setBulkApproving(false);
+    }
+  }, [draftItems, selectedKnowledgeBase.id]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isEditable =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable;
+      if (isEditable) {
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
+        event.preventDefault();
+        void bulkApproveDraftItems();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [bulkApproveDraftItems]);
+
+  async function trainBoundaryModel() {
+    setTraining(true);
+    setNotice("正在训练边界模型。");
+    setTrainingJob({
+      id: `classifier-local-${Date.now()}`,
+      knowledge_base_id: selectedKnowledgeBase.id,
+      status: "running",
+      message: "正在训练边界模型。",
+      created_at: Date.now() / 1000,
+      finished_at: null,
+    });
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/classifier-jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: modelName,
+          model_scope: modelScope,
+          model_alias: modelAlias,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "训练任务创建失败。"));
+      }
+      const job = (await response.json()) as IndexJob;
+      setTrainingJob(job);
+      setNotice(job.message);
+    } catch (error) {
+      setTrainingJob((current) => ({
+        id: current?.id ?? `classifier-local-${Date.now()}`,
+        knowledge_base_id: selectedKnowledgeBase.id,
+        status: "failed",
+        message: error instanceof Error ? error.message : "训练任务创建失败。",
+        created_at: current?.created_at ?? Date.now() / 1000,
+        finished_at: Date.now() / 1000,
+      }));
+      setNotice(error instanceof Error ? error.message : "训练任务创建失败。");
+    } finally {
+      setTraining(false);
+    }
+  }
+
+  const visibleItems = items;
+  const canTrain = approvedCount >= 4 && approvedInScopeCount > 0 && approvedOutOfScopeCount > 0;
+  const trainingHint = canTrain ? "已满足二分类训练条件" : "需至少 4 条确认样本，并包含范围内/范围外";
+  const modelStatus = training ? "running" : trainingJob?.status ?? "idle";
+  const modelStatusLabel =
+    modelStatus === "running"
+      ? "正在训练"
+      : modelStatus === "succeeded"
+        ? "训练完成"
+        : modelStatus === "failed"
+          ? "训练失败"
+          : "待训练";
+  const modelStatusDetail =
+    trainingJob?.message ?? (canTrain ? "样本已就绪，可以启动一次新的边界模型训练。" : trainingHint);
+  const modelScopeLabel = modelScope === "global" ? "全局基线" : modelScope === "session" ? "会话实验" : "知识库专属";
 
   return (
     <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-        <div className="grid min-h-0 grid-rows-[190px_auto_minmax(0,1fr)] gap-4">
+      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-3 lg:grid-cols-[240px_minmax(360px,1fr)_260px] xl:grid-cols-[300px_minmax(0,1fr)_330px] xl:gap-4">
+        <div className="grid min-h-0 grid-rows-[150px_auto_minmax(0,1fr)] gap-3 xl:grid-rows-[178px_auto_minmax(0,1fr)]">
           <VisualHero
             image={BOUNDARY_VISUAL_SRC}
             eyebrow="Boundary"
@@ -1105,10 +1310,10 @@ function BoundaryTrainingWorkspace({
                   </option>
                 ))}
               </select>
-              <div className="grid grid-cols-3 gap-2">
-                <MiniStat label="样本" value={`${items.length}`} />
-                <MiniStat label="确认" value={`${approvedCount}`} />
-                <MiniStat label="待审" value={`${draftCount}`} />
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--panel-muted)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                <span className="font-semibold text-[var(--foreground)]">{items.length}</span> 条样本，
+                <span className="font-semibold text-[var(--foreground)]">{approvedCount}</span> 条已确认，
+                <span className="font-semibold text-[var(--foreground)]">{draftCount}</span> 条待确认。
               </div>
             </CardContent>
           </Card>
@@ -1123,7 +1328,7 @@ function BoundaryTrainingWorkspace({
                 value={manualText}
                 onChange={(event) => setManualText(event.target.value)}
                 placeholder="例如：校园卡丢了怎么办？"
-                rows={4}
+                rows={3}
                 className="w-full resize-none rounded-xl border border-[var(--border)] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[var(--accent)]"
               />
               <Button type="button" variant="primary" className="w-full justify-center" onClick={createManualItem} disabled={saving}>
@@ -1136,65 +1341,206 @@ function BoundaryTrainingWorkspace({
 
         <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
           <CardHeader className="shrink-0">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <h2 className="text-sm font-semibold">样本卡片</h2>
                 <p className="text-xs text-[var(--muted)]">{notice}</p>
               </div>
-              <Button type="button" variant="secondary" size="sm" onClick={() => void refreshItems()} disabled={loading}>
-                {loading ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
-                刷新
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void bulkApproveDraftItems()}
+                  disabled={!draftItems.length || bulkApproving}
+                  title="批量确认待审样本"
+                >
+                  {bulkApproving ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
+                  批量确认
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => void refreshItems()} disabled={loading}>
+                  {loading ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+                  刷新
+                </Button>
+              </div>
             </div>
           </CardHeader>
-          <CardContent className="min-h-0 flex-1 p-4">
+          <CardContent className="relative min-h-0 flex-1 p-0">
             {visibleItems.length ? (
-              <div className="grid h-full min-h-0 auto-rows-fr grid-cols-1 gap-3 md:grid-cols-2">
-                {visibleItems.map((item) => (
-                  <BoundaryItemCard
-                    key={item.id}
-                    item={item}
-                    active={selectedItem?.id === item.id}
-                    swiped={swipedItemId === item.id}
-                    onSelect={() => {
-                      setSelectedItemId(item.id);
-                      setSwipedItemId(null);
-                    }}
-                    onDelete={() => void deleteItem(item.id)}
-                    onPointerStart={(x) => {
-                      pointerStartRef.current = { id: item.id, x };
-                    }}
-                    onPointerEnd={(x) => {
-                      const start = pointerStartRef.current;
-                      if (start?.id === item.id && start.x - x > 46) {
-                        setSwipedItemId(item.id);
-                      } else if (start?.id === item.id && x - start.x > 20) {
+              <>
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-12 bg-[linear-gradient(180deg,#fff_0%,rgba(255,255,255,0)_100%)]" />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-14 bg-[linear-gradient(0deg,#fff_0%,rgba(255,255,255,0)_100%)]" />
+                <div className="boundary-preview-scroll h-full min-h-0 overflow-y-auto px-5 py-5 scroll-smooth">
+                  <div className="mx-auto flex max-w-[760px] flex-col gap-3">
+                    <div className="sticky top-0 z-20 mb-1 rounded-2xl border border-[var(--border)] bg-white/88 px-4 py-3 shadow-sm backdrop-blur">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-medium text-[var(--muted)]">训练样本流</p>
+                          <p className="mt-0.5 text-sm font-semibold">
+                            {approvedInScopeCount} 条范围内 · {approvedOutOfScopeCount} 条范围外
+                          </p>
+                        </div>
+                        <StatusChip label={canTrain ? "可训练" : "待补充"} tone={canTrain ? "ok" : "warning"} />
+                      </div>
+                    </div>
+                  {visibleItems.map((item) => (
+                    <BoundaryItemCard
+                      key={item.id}
+                      item={item}
+                      active={selectedItem?.id === item.id}
+                      editing={editingItemId === item.id}
+                      swiped={swipedItemId === item.id}
+                      editText={editText}
+                      editLabel={editLabel}
+                      saving={saving}
+                      onSelect={() => {
+                        setSelectedItemId(item.id);
                         setSwipedItemId(null);
-                      }
-                      pointerStartRef.current = null;
-                    }}
-                  />
-                ))}
-              </div>
+                      }}
+                      onOpenEditor={() => {
+                        setSelectedItemId(item.id);
+                        setEditingItemId(item.id);
+                        setSwipedItemId(null);
+                      }}
+                      onCancelEdit={() => setEditingItemId(null)}
+                      onSave={() => void saveSelectedItem()}
+                      onDelete={() => void deleteItem(item.id)}
+                      onEditTextChange={setEditText}
+                      onEditLabelChange={setEditLabel}
+                      onPointerStart={(x) => {
+                        pointerStartRef.current = { id: item.id, x };
+                      }}
+                      onPointerEnd={(x) => {
+                        const start = pointerStartRef.current;
+                        if (start?.id === item.id && start.x - x > 46) {
+                          setSwipedItemId(item.id);
+                        } else if (start?.id === item.id && x - start.x > 20) {
+                          setSwipedItemId(null);
+                        }
+                        pointerStartRef.current = null;
+                      }}
+                    />
+                  ))}
+                  </div>
+                </div>
+              </>
             ) : (
               <PanelEmpty icon={BrainCircuit} title="等待样本" description="添加或智能扩充后即可训练边界。" />
             )}
           </CardContent>
         </Card>
 
-        <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4">
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
+        <aside className="grid min-h-0 content-start gap-3 overflow-hidden xl:gap-4">
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="px-4 py-2.5">
+              <h2 className="text-sm font-semibold">模型训练</h2>
+              <p className="text-xs text-[var(--muted)]">命名并应用边界二分类器</p>
+            </CardHeader>
+            <CardContent className="space-y-2.5 p-3">
+              <label className="block text-xs font-medium text-[var(--muted)]" htmlFor="boundary-model-name">
+                模型名称
+              </label>
+              <input
+                id="boundary-model-name"
+                value={modelName}
+                onChange={(event) => setModelName(event.target.value)}
+                className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-semibold outline-none transition focus:border-[var(--accent)]"
+              />
+              <div className="grid grid-cols-[1fr_112px] gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-[11px] font-medium text-[var(--muted)]">管理层级</span>
+                  <select
+                    value={modelScope}
+                    onChange={(event) => setModelScope(event.target.value as "global" | "knowledge_base" | "session")}
+                    className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  >
+                    <option value="knowledge_base">知识库专属</option>
+                    <option value="global">全局基线</option>
+                    <option value="session">会话实验</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] font-medium text-[var(--muted)]">别名</span>
+                  <input
+                    value={modelAlias}
+                    onChange={(event) => setModelAlias(event.target.value)}
+                    className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  />
+                </label>
+              </div>
+              <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_55%,#f8fbfc_100%)] p-3 shadow-sm">
+                <div className="relative flex items-center gap-3">
+                  <div
+                    className={cn(
+                      "boundary-model-orb flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-[0_18px_36px_rgba(0,108,99,0.24)]",
+                      modelStatus === "failed"
+                        ? "bg-[linear-gradient(135deg,#d4483d_0%,#8f1f18_100%)]"
+                        : "bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)]",
+                      modelStatus === "running" ? "boundary-model-orb--running" : "",
+                    )}
+                  >
+                    {modelStatus === "running" ? (
+                      <Loader2 className="animate-spin" size={18} aria-hidden="true" />
+                    ) : modelStatus === "succeeded" ? (
+                      <CheckCircle2 size={18} aria-hidden="true" />
+                    ) : (
+                      <BrainCircuit size={18} aria-hidden="true" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{modelName || "未命名边界模型"}</p>
+                    <p className="mt-1 text-xs font-medium text-[var(--accent-strong)]">{modelStatusLabel}</p>
+                  </div>
+                </div>
+                <p className="relative mt-2 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{modelStatusDetail}</p>
+                <div className="relative mt-2 flex flex-wrap gap-1.5">
+                  <span className="rounded-full border border-[var(--accent-soft)] bg-white/78 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-strong)]">
+                    {modelScopeLabel}
+                  </span>
+                  <span className="max-w-full truncate rounded-full border border-[var(--border)] bg-white/78 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                    {selectedKnowledgeBase.name}
+                  </span>
+                  <span className="rounded-full border border-[var(--border)] bg-white/78 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                    @{modelAlias || "应用版"}
+                  </span>
+                </div>
+                <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white shadow-inner">
+                  <div
+                    className={cn(
+                      "boundary-training-meter h-full rounded-full transition-all duration-700",
+                      modelStatus === "running" ? "w-2/3" : modelStatus === "succeeded" ? "w-full" : "w-1/5",
+                      modelStatus === "failed" ? "bg-[var(--danger)]" : "",
+                    )}
+                  />
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className="w-full justify-center"
+                onClick={trainBoundaryModel}
+                disabled={training || !canTrain}
+                title={canTrain ? "训练并应用边界模型" : "请先确认足够的正负样本"}
+              >
+                {training ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <BrainCircuit size={14} aria-hidden="true" />}
+                训练并应用
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+            <CardHeader className="px-4 py-2.5">
               <h2 className="text-sm font-semibold">智能扩充</h2>
               <p className="text-xs text-[var(--muted)]">基于当前知识库生成候选样本</p>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2.5 p-3">
               <div className="grid grid-cols-[1fr_92px] gap-2">
                 <input
                   value={aiHint}
                   onChange={(event) => setAiHint(event.target.value)}
                   placeholder="类别提示"
-                  className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  className="h-9 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
                 />
                 <input
                   type="number"
@@ -1203,63 +1549,16 @@ function BoundaryTrainingWorkspace({
                   value={aiCount}
                   aria-label="生成数量"
                   onChange={(event) => setAiCount(Math.max(1, Math.min(30, Number(event.target.value) || 1)))}
-                  className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  className="h-9 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
                 />
               </div>
-              <Button type="button" variant="primary" className="w-full justify-center" onClick={generateItems} disabled={generating}>
+              <Button type="button" variant="primary" size="sm" className="w-full justify-center" onClick={generateItems} disabled={generating}>
                 {generating ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
                 生成候选
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
-            <CardHeader className="shrink-0">
-              <h2 className="text-sm font-semibold">编辑样本</h2>
-              <p className="text-xs text-[var(--muted)]">点击卡片后可调整内容</p>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-col gap-3">
-              {selectedItem ? (
-                <>
-                  <div className="rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(180deg,#ffffff_0%,#f4fbf9_100%)] p-3 shadow-sm">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <StatusChip
-                        label={selectedItem.status === "approved" ? "已确认" : "待确认"}
-                        tone={selectedItem.status === "approved" ? "ok" : "warning"}
-                      />
-                      <span className="text-xs text-[var(--muted)]">{selectedItem.source === "llm" ? "智能" : "手动"}</span>
-                    </div>
-                    <BoundaryLabelToggle value={editLabel} onChange={setEditLabel} />
-                    <textarea
-                      value={editText}
-                      onChange={(event) => setEditText(event.target.value)}
-                      rows={7}
-                      className="mt-3 w-full flex-1 resize-none rounded-xl border border-[var(--border)] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[var(--accent)]"
-                    />
-                  </div>
-                  <div className="grid grid-cols-[1fr_auto] gap-2">
-                    <Button type="button" variant="primary" className="justify-center" onClick={saveSelectedItem} disabled={saving}>
-                      {saving ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
-                      保存
-                    </Button>
-                    <Button type="button" variant="secondary" size="icon" title="删除样本" onClick={() => void deleteItem(selectedItem.id)}>
-                      <X size={15} aria-hidden="true" />
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <PanelEmpty icon={PenLine} title="选择样本" description="点击左侧卡片进行编辑。" />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardContent className="grid grid-cols-3 gap-2 p-3">
-              <MiniStat label="范围内" value={`${items.filter((item) => item.label === 1).length}`} />
-              <MiniStat label="范围外" value={`${items.filter((item) => item.label === 0).length}`} />
-              <MiniStat label="显示" value={`${visibleItems.length}`} />
-            </CardContent>
-          </Card>
         </aside>
       </div>
     </section>
@@ -1455,7 +1754,7 @@ function ProductSidebar({
       />
       <aside
         className={cn(
-          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-all duration-300 ease-out lg:static lg:z-auto lg:h-full lg:translate-x-0 lg:overflow-visible lg:shadow-none",
+          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-all duration-300 ease-out lg:relative lg:z-[90] lg:h-full lg:translate-x-0 lg:overflow-visible lg:shadow-none",
           collapsed ? "product-sidebar--collapsed" : "",
           open ? "translate-x-0" : "-translate-x-full",
         )}
@@ -1478,7 +1777,6 @@ function ProductSidebar({
             )}
             onClick={onToggleCollapse}
             aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
-            title={collapsed ? "展开侧栏" : "收起侧栏"}
           >
             <Menu size={18} aria-hidden="true" />
           </button>
@@ -1500,7 +1798,6 @@ function ProductSidebar({
                 onClick={onNewSession}
                 className="group relative hidden h-10 w-full items-center justify-center rounded-lg text-slate-700 transition hover:bg-white hover:text-slate-950 hover:shadow-sm lg:flex"
                 aria-label="新建问答"
-                title="新建问答"
               >
                 <PenLine size={18} strokeWidth={2.1} aria-hidden="true" />
                 <IconTooltip label="新建问答" />
@@ -1528,7 +1825,6 @@ function ProductSidebar({
                         : "text-slate-700 hover:bg-white hover:text-slate-950 hover:shadow-sm",
                     )}
                     aria-label={item.label}
-                    title={item.label}
                   >
                     <Icon size={18} strokeWidth={2.1} aria-hidden="true" />
                     <IconTooltip label={item.label} />
@@ -1614,7 +1910,6 @@ function ProductSidebar({
               onClick={onSignOut}
               className="group relative hidden h-10 w-full items-center justify-center rounded-lg bg-white text-[var(--accent-strong)] shadow-sm transition hover:bg-[var(--panel-strong)] lg:flex"
               aria-label={`${user.name} · 退出登录`}
-              title={`${user.name} · 退出登录`}
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold">
                 {user.name.slice(0, 1)}
@@ -1637,7 +1932,7 @@ function ProductSidebar({
                   type="button"
                   onClick={onSignOut}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]"
-                  title="退出登录"
+                  aria-label="退出登录"
                 >
                   <LogOut size={15} aria-hidden="true" />
                 </button>
@@ -1725,7 +2020,7 @@ function ProductHeader({
 
 function IconTooltip({ label }: { label: string }) {
   return (
-    <span className="pointer-events-none absolute left-[calc(100%+12px)] top-1/2 z-[80] hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-black px-3 py-1.5 text-sm font-semibold text-white opacity-0 shadow-[0_10px_28px_rgba(15,23,42,0.22)] transition-all duration-200 ease-out group-hover:translate-x-0.5 group-hover:opacity-100 lg:block">
+    <span className="pointer-events-none absolute left-[calc(100%+12px)] top-1/2 z-[9999] hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-950 px-3 py-1.5 text-sm font-semibold text-white opacity-0 shadow-[0_18px_40px_rgba(15,23,42,0.28)] ring-1 ring-white/10 transition-all duration-200 ease-out group-hover:translate-x-0.5 group-hover:opacity-100 lg:block">
       {label}
     </span>
   );
@@ -1845,15 +2140,6 @@ function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-white/82 px-2 py-2 text-center shadow-sm">
-      <p className="truncate text-[11px] text-[var(--muted)]">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold">{value}</p>
-    </div>
-  );
-}
-
 function KnowledgeBaseSelect({
   knowledgeBases,
   selectedId,
@@ -1936,22 +2222,74 @@ function BoundaryLabelToggle({
 function BoundaryItemCard({
   item,
   active,
+  editing,
   swiped,
+  editText,
+  editLabel,
+  saving,
   onSelect,
+  onOpenEditor,
+  onCancelEdit,
+  onSave,
   onDelete,
+  onEditTextChange,
+  onEditLabelChange,
   onPointerStart,
   onPointerEnd,
 }: {
   item: BoundaryDatasetItem;
   active: boolean;
+  editing: boolean;
   swiped: boolean;
+  editText: string;
+  editLabel: 0 | 1;
+  saving: boolean;
   onSelect: () => void;
+  onOpenEditor: () => void;
+  onCancelEdit: () => void;
+  onSave: () => void;
   onDelete: () => void;
+  onEditTextChange: (value: string) => void;
+  onEditLabelChange: (value: 0 | 1) => void;
   onPointerStart: (x: number) => void;
   onPointerEnd: (x: number) => void;
 }) {
+  if (editing) {
+    return (
+      <div className="boundary-edit-card relative min-h-[260px] snap-start scroll-mt-4 overflow-hidden rounded-2xl border border-[var(--accent)] bg-[linear-gradient(135deg,#ffffff_0%,#f4fbf9_58%,#ffffff_100%)] p-4 shadow-[0_24px_60px_rgba(0,108,99,0.18)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(0,108,99,0.14)_0%,rgba(0,108,99,0)_34%),radial-gradient(circle_at_100%_20%,rgba(39,100,197,0.12)_0%,rgba(39,100,197,0)_30%)]" />
+        <div className="relative flex items-center justify-between gap-2">
+          <StatusChip label={item.status === "approved" ? "已确认" : "待确认"} tone={item.status === "approved" ? "ok" : "warning"} />
+          <span className="text-[11px] text-[var(--muted)]">{item.source === "llm" ? "智能生成" : "手动样本"}</span>
+        </div>
+        <div className="relative mt-4">
+          <BoundaryLabelToggle value={editLabel} onChange={onEditLabelChange} />
+          <textarea
+            value={editText}
+            onChange={(event) => onEditTextChange(event.target.value)}
+            rows={4}
+            autoFocus
+            className="mt-3 min-h-[96px] w-full resize-none rounded-xl border border-[var(--border)] bg-white/92 px-3 py-3 text-sm font-medium leading-6 shadow-inner outline-none transition focus:border-[var(--accent)]"
+          />
+        </div>
+        <div className="relative mt-4 grid grid-cols-[1fr_auto_auto] gap-2">
+          <Button type="button" variant="primary" className="justify-center" onClick={onSave} disabled={saving}>
+            {saving ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
+            保存
+          </Button>
+          <Button type="button" variant="danger" size="icon" title="删除样本" onClick={onDelete}>
+            <X size={15} aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="secondary" size="icon" title="收起编辑" onClick={onCancelEdit}>
+            <ChevronRight size={15} aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative min-h-0 overflow-hidden rounded-2xl">
+    <div className="relative min-h-[122px] snap-start scroll-mt-4 overflow-hidden rounded-2xl">
       <button
         type="button"
         onClick={onDelete}
@@ -1963,13 +2301,13 @@ function BoundaryItemCard({
       <button
         type="button"
         onClick={onSelect}
+        onDoubleClick={onOpenEditor}
         onPointerDown={(event) => onPointerStart(event.clientX)}
         onPointerUp={(event) => onPointerEnd(event.clientX)}
         onPointerCancel={(event) => onPointerEnd(event.clientX)}
         className={cn(
-          "relative flex h-full min-h-[118px] w-full flex-col justify-between rounded-2xl border bg-white p-4 text-left shadow-sm transition duration-300 ease-out",
+          "group relative flex min-h-[122px] w-full flex-col justify-between rounded-2xl border bg-white p-4 text-left shadow-sm transition duration-300 ease-out hover:-translate-y-0.5",
           active ? "border-[var(--accent)] shadow-[0_20px_48px_rgba(0,108,99,0.14)]" : "border-[var(--border)] hover:border-[var(--accent-soft)] hover:shadow-md",
-          active ? "scale-[1.01]" : "",
           swiped ? "-translate-x-14" : "translate-x-0",
         )}
       >
@@ -1980,7 +2318,7 @@ function BoundaryItemCard({
         <p className="mt-3 line-clamp-2 text-sm font-medium leading-6">{item.text}</p>
         <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-[var(--muted)]">
           <span>{item.status === "approved" ? "已确认" : "待确认"}</span>
-          <span>{formatTimestamp(item.created_at)}</span>
+          <span className="transition group-hover:text-[var(--accent-strong)]">{formatTimestamp(item.created_at)}</span>
         </div>
       </button>
     </div>
@@ -1994,6 +2332,45 @@ function StateRow({ label, value }: { label: string; value: string }) {
       <span className="shrink-0 text-sm font-semibold">{value}</span>
     </div>
   );
+}
+
+function classifierScopeLabel(scope: ClassifierModel["scope"]) {
+  const labels: Record<ClassifierModel["scope"], string> = {
+    global: "全局基线",
+    knowledge_base: "知识库专属",
+    session: "会话实验",
+  };
+  return labels[scope] ?? "知识库专属";
+}
+
+function classifierStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    ready: "已训练",
+    running: "训练中",
+    failed: "训练失败",
+  };
+  return labels[status] ?? status;
+}
+
+function parseClassifierModelMetrics(metricsJson?: string): Record<string, number> {
+  if (!metricsJson) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(metricsJson) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function formatMetricPercent(value?: number) {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  return `${Math.round(value * 100)}%`;
 }
 
 function QualityMetricCard({

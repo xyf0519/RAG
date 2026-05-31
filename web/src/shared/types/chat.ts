@@ -138,6 +138,21 @@ export type IndexJob = {
   finished_at?: number | null;
 };
 
+export type ClassifierModel = {
+  id: string;
+  knowledge_base_id: string;
+  name: string;
+  scope: "global" | "knowledge_base" | "session";
+  alias: string;
+  version: number;
+  status: string;
+  artifact_path: string;
+  metrics_json: string;
+  job_id: string;
+  created_at: number;
+  activated_at?: number | null;
+};
+
 export type BoundaryDatasetItem = {
   id: string;
   knowledge_base_id: string;

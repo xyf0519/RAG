@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import shutil
 import sqlite3
 import time
@@ -18,6 +19,7 @@ from xyfrag.index import KnowledgeIndex, build_index
 KnowledgeBaseStatus = Literal["active", "disabled"]
 IndexStatus = Literal["not_indexed", "pending", "building", "ready", "failed"]
 JobStatus = Literal["running", "succeeded", "failed"]
+ModelScope = Literal["global", "knowledge_base", "session"]
 
 DEFAULT_KNOWLEDGE_BASE_ID = "kb-default"
 
@@ -73,6 +75,24 @@ class BoundaryDatasetItemRecord:
     source: str
     status: str
     created_at: float
+
+
+@dataclass(frozen=True)
+class ClassifierModelRecord:
+    """Trained boundary model metadata."""
+
+    id: str
+    knowledge_base_id: str
+    name: str
+    scope: ModelScope
+    alias: str
+    version: int
+    status: str
+    artifact_path: str
+    metrics_json: str
+    job_id: str
+    created_at: float
+    activated_at: float | None
 
 
 class KnowledgeBaseStore:
@@ -150,6 +170,23 @@ class KnowledgeBaseStore:
                     created_at REAL NOT NULL,
                     finished_at REAL,
                     FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS classifier_models (
+                    id TEXT PRIMARY KEY,
+                    knowledge_base_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    artifact_path TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    activated_at REAL,
+                    FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id),
+                    FOREIGN KEY (job_id) REFERENCES classifier_jobs(id)
                 );
                 """
             )
@@ -412,6 +449,109 @@ class KnowledgeBaseStore:
             ).fetchone()
         return self._job_from_row(row) if row else None
 
+    def create_classifier_job(
+        self,
+        knowledge_base_id: str,
+        model_name: str = "边界范围模型",
+        model_scope: ModelScope = "knowledge_base",
+        model_alias: str = "应用版",
+    ) -> IndexJobRecord:
+        self.require_knowledge_base(knowledge_base_id)
+        job_id = f"classifier-{knowledge_base_id}-{uuid4().hex[:12]}"
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO classifier_jobs (
+                    id, knowledge_base_id, status, message, created_at, finished_at
+                )
+                VALUES (?, ?, ?, ?, ?, NULL)
+                """,
+                (job_id, knowledge_base_id, "running", "正在训练边界模型。", now),
+            )
+
+        try:
+            items = [
+                item
+                for item in self.list_boundary_items(knowledge_base_id)
+                if item.status == "approved"
+            ]
+            labels = {item.label for item in items}
+            if len(items) < 4 or labels != {0, 1}:
+                message = "请先确认至少 4 条样本，并同时包含范围内与范围外。"
+                return self._finish_classifier_job(job_id, "failed", message)
+
+            texts = [item.text for item in items]
+            y = [item.label for item in items]
+
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.neural_network import MLPClassifier
+            from sklearn.pipeline import Pipeline
+            import joblib
+
+            pipeline = Pipeline(
+                [
+                    (
+                        "tfidf",
+                        TfidfVectorizer(
+                            analyzer="char_wb",
+                            ngram_range=(2, 4),
+                            min_df=1,
+                        ),
+                    ),
+                    (
+                        "mlp",
+                        MLPClassifier(
+                            hidden_layer_sizes=(24,),
+                            activation="relu",
+                            solver="lbfgs",
+                            random_state=42,
+                            max_iter=400,
+                        ),
+                    ),
+                ]
+            )
+            pipeline.fit(texts, y)
+            accuracy = float(pipeline.score(texts, y))
+
+            classifier_dir = self.classifier_dir(knowledge_base_id)
+            classifier_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path = classifier_dir / "classifier.joblib"
+            joblib.dump(pipeline, artifact_path)
+            self._write_boundary_training_snapshot(knowledge_base_id, items)
+            self._register_classifier_model(
+                knowledge_base_id=knowledge_base_id,
+                job_id=job_id,
+                name=model_name,
+                scope=model_scope,
+                alias=model_alias,
+                artifact_path=artifact_path,
+                metrics={
+                    "accuracy": accuracy,
+                    "sample_count": len(items),
+                    "positive_count": sum(item.label == 1 for item in items),
+                    "negative_count": sum(item.label == 0 for item in items),
+                },
+            )
+            message = f"训练完成，已应用 {len(items)} 条样本，准确率 {accuracy:.0%}。"
+            return self._finish_classifier_job(job_id, "succeeded", message)
+        except Exception as exc:
+            return self._finish_classifier_job(job_id, "failed", f"训练失败：{exc}")
+
+    def list_classifier_models(self, knowledge_base_id: str) -> list[ClassifierModelRecord]:
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM classifier_models
+                WHERE knowledge_base_id = ? OR scope = 'global'
+                ORDER BY COALESCE(activated_at, 0) DESC, created_at DESC
+                """,
+                (knowledge_base_id,),
+            ).fetchall()
+        return [self._classifier_model_from_row(row) for row in rows]
+
     def list_boundary_items(
         self,
         knowledge_base_id: str,
@@ -613,6 +753,127 @@ class KnowledgeBaseStore:
             status=str(row["status"]),
             created_at=float(row["created_at"]),
         )
+
+    @staticmethod
+    def _classifier_model_from_row(row: sqlite3.Row) -> ClassifierModelRecord:
+        return ClassifierModelRecord(
+            id=str(row["id"]),
+            knowledge_base_id=str(row["knowledge_base_id"]),
+            name=str(row["name"]),
+            scope=row["scope"],
+            alias=str(row["alias"]),
+            version=int(row["version"]),
+            status=str(row["status"]),
+            artifact_path=str(row["artifact_path"]),
+            metrics_json=str(row["metrics_json"]),
+            job_id=str(row["job_id"]),
+            created_at=float(row["created_at"]),
+            activated_at=row["activated_at"],
+        )
+
+    def _finish_classifier_job(
+        self,
+        job_id: str,
+        status: JobStatus,
+        message: str,
+    ) -> IndexJobRecord:
+        finished_at = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE classifier_jobs
+                SET status = ?, message = ?, finished_at = ?
+                WHERE id = ?
+                """,
+                (status, message, finished_at, job_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM classifier_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        return self._job_from_row(row)
+
+    def _register_classifier_model(
+        self,
+        *,
+        knowledge_base_id: str,
+        job_id: str,
+        name: str,
+        scope: ModelScope,
+        alias: str,
+        artifact_path: Path,
+        metrics: dict[str, float | int],
+    ) -> None:
+        normalized_name = name.strip()[:120] or "边界范围模型"
+        normalized_alias = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", alias.strip() or "应用版")[:64]
+        if scope not in {"global", "knowledge_base", "session"}:
+            scope = "knowledge_base"
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE classifier_models
+                SET status = ?
+                WHERE knowledge_base_id = ? AND status = ?
+                """,
+                ("archived", knowledge_base_id, "ready"),
+            )
+            row = connection.execute(
+                """
+                SELECT MAX(version) AS version
+                FROM classifier_models
+                WHERE knowledge_base_id = ? AND scope = ? AND name = ?
+                """,
+                (knowledge_base_id, scope, normalized_name),
+            ).fetchone()
+            version = int(row["version"] or 0) + 1
+            connection.execute(
+                """
+                INSERT INTO classifier_models (
+                    id, knowledge_base_id, name, scope, alias, version, status,
+                    artifact_path, metrics_json, job_id, created_at, activated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"model-{knowledge_base_id}-{uuid4().hex[:12]}",
+                    knowledge_base_id,
+                    normalized_name,
+                    scope,
+                    normalized_alias,
+                    version,
+                    "ready",
+                    str(artifact_path),
+                    json.dumps(metrics, ensure_ascii=False),
+                    job_id,
+                    now,
+                    now,
+                ),
+            )
+
+    def _write_boundary_training_snapshot(
+        self,
+        knowledge_base_id: str,
+        items: list[BoundaryDatasetItemRecord],
+    ) -> None:
+        boundary_dir = self._kb_root / knowledge_base_id / "boundary"
+        boundary_dir.mkdir(parents=True, exist_ok=True)
+        train_path = boundary_dir / "train.jsonl"
+        with train_path.open("w", encoding="utf-8") as file:
+            for item in items:
+                file.write(
+                    json.dumps(
+                        {
+                            "text": item.text,
+                            "label": item.label,
+                            "source": item.source,
+                            "status": item.status,
+                            "created_at": item.created_at,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
 
     def _create_layout(self, knowledge_base_id: str) -> None:
         self.raw_dir(knowledge_base_id)
