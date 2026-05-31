@@ -23,6 +23,10 @@ import {
   LogOut,
   Menu,
   MessageSquareText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   PenLine,
   Plus,
   RefreshCw,
@@ -35,7 +39,6 @@ import {
   ThumbsDown,
   ThumbsUp,
   UploadCloud,
-  Wifi,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -62,29 +65,6 @@ import type {
   KnowledgeDocument,
   Source,
 } from "@/shared/types/chat";
-
-const EXAMPLES = [
-  {
-    title: "补考安排",
-    query: "挂科后什么时候申请补考？",
-    meta: "学籍与考试",
-  },
-  {
-    title: "校园卡挂失",
-    query: "校园卡丢了怎么办？",
-    meta: "校园服务",
-  },
-  {
-    title: "请假审批",
-    query: "请假超过三天谁审批？",
-    meta: "学生事务",
-  },
-  {
-    title: "范围熔断",
-    query: "给我讲个笑话",
-    meta: "边界测试",
-  },
-];
 
 type WorkspaceView = "chat" | "knowledge" | "boundary" | "quality";
 
@@ -115,6 +95,7 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
 
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
+const CHAT_BACKGROUND_SRC = "/images/background.png";
 
 const QUALITY_REVIEWS = [
   {
@@ -193,6 +174,7 @@ export function ChatWorkspace() {
   const [healthOk, setHealthOk] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sourcesCollapsed, setSourcesCollapsed] = useState(false);
   const [copiedAnswerId, setCopiedAnswerId] = useState<string | null>(null);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([DEFAULT_KNOWLEDGE_BASE]);
@@ -264,12 +246,6 @@ export function ChatWorkspace() {
   );
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
-  const stats = {
-    turns: chat.messages.filter((message) => message.role === "user").length,
-    sources: currentSources.length,
-    totalElapsed: latestMetadata.timings?.total_elapsed_seconds,
-    boundary: latestMetadata.boundary?.is_in_scope,
-  };
   const feedbackStats = useMemo(() => {
     const assistantMessages = chat.messages.filter((message) => message.role === "assistant");
     return {
@@ -395,16 +371,17 @@ export function ChatWorkspace() {
               chat={chat}
               input={input}
               mobileTab={mobileTab}
-              stats={stats}
               currentSources={currentSources}
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBase={selectedKnowledgeBase}
               latestMetadata={latestMetadata}
               feedbackStats={feedbackStats}
               copiedAnswerId={copiedAnswerId}
+              sourcesCollapsed={sourcesCollapsed}
               onInput={setInput}
               onMobileTab={setMobileTab}
               onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
+              onToggleSources={() => setSourcesCollapsed((value) => !value)}
               onSubmit={onSubmit}
               onCopyAnswer={(message) => void copyAnswer(message)}
               onFeedback={submitFeedback}
@@ -421,16 +398,17 @@ function ChatWorkspaceView({
   chat,
   input,
   mobileTab,
-  stats,
   currentSources,
   knowledgeBases,
   selectedKnowledgeBase,
   latestMetadata,
   feedbackStats,
   copiedAnswerId,
+  sourcesCollapsed,
   onInput,
   onMobileTab,
   onSelectKnowledgeBase,
+  onToggleSources,
   onSubmit,
   onCopyAnswer,
   onFeedback,
@@ -439,12 +417,6 @@ function ChatWorkspaceView({
   chat: ReturnType<typeof useRagChatStream>;
   input: string;
   mobileTab: MobileTab;
-  stats: {
-    turns: number;
-    sources: number;
-    totalElapsed?: number;
-    boundary?: boolean;
-  };
   currentSources: Source[];
   knowledgeBases: KnowledgeBase[];
   selectedKnowledgeBase: KnowledgeBase;
@@ -456,68 +428,76 @@ function ChatWorkspaceView({
   };
   feedbackStats: FeedbackStats;
   copiedAnswerId: string | null;
+  sourcesCollapsed: boolean;
   onInput: (value: string) => void;
   onMobileTab: (tab: MobileTab) => void;
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void;
+  onToggleSources: () => void;
   onSubmit: (event: FormEvent) => void;
   onCopyAnswer: (message: ChatMessage) => void;
   onFeedback: (message: ChatMessage, rating: FeedbackRating) => void;
   onToggleFavorite: (messageId: string) => void;
 }) {
   return (
-    <div className="grid min-h-0 flex-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:grid-cols-[minmax(0,1fr)_392px] lg:gap-4 lg:px-5 lg:py-4">
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--panel)] shadow-[var(--shadow-panel)]">
-        <ChatHeroStats stats={stats} />
-
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--panel)] px-4 py-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-base font-semibold">可信问答工作台</h1>
-              <StatusBadge status={chat.status} />
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <Image src={CHAT_BACKGROUND_SRC} alt="" fill priority sizes="100vw" className="object-cover opacity-70" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(249,251,252,0.72)_0%,rgba(245,249,250,0.90)_62%,rgba(245,249,250,0.96)_100%)]" />
+      <div
+        className={cn(
+          "relative grid h-full min-h-0 grid-cols-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:gap-4 lg:px-5 lg:py-4",
+          sourcesCollapsed
+            ? "lg:grid-cols-[minmax(0,1fr)_56px]"
+            : "lg:grid-cols-[minmax(0,1fr)_392px]",
+        )}
+      >
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/70 bg-white/62 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="truncate text-sm font-semibold">xyfRAG</h1>
+                <StatusBadge status={chat.status} />
+              </div>
+              <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
+                {selectedKnowledgeBase.name}
+              </p>
             </div>
-            <p className="mt-1 truncate text-xs text-[var(--muted)]">
-              会话 {chat.sessionId || "准备中"} · 可追溯引用与边界熔断
-            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <KnowledgeBaseSelect
+                knowledgeBases={knowledgeBases}
+                selectedId={selectedKnowledgeBase.id}
+                onSelect={onSelectKnowledgeBase}
+              />
+              {chat.status === "streaming" ? (
+                <Button type="button" variant="danger" size="icon" onClick={chat.stop} title="停止生成" aria-label="停止生成">
+                  <Square size={14} aria-hidden="true" />
+                </Button>
+              ) : (
+                <Button type="button" variant="secondary" size="icon" onClick={chat.retry} disabled={!chat.lastError} title="重试" aria-label="重试">
+                  <RefreshCw size={14} aria-hidden="true" />
+                </Button>
+              )}
+            </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <KnowledgeBaseSelect
-              knowledgeBases={knowledgeBases}
-              selectedId={selectedKnowledgeBase.id}
-              onSelect={onSelectKnowledgeBase}
-            />
-            {chat.status === "streaming" ? (
-              <Button type="button" variant="danger" size="sm" onClick={chat.stop}>
-                <Square size={14} aria-hidden="true" />
-                停止
-              </Button>
+
+          <div className="chat-scroll flex-1 overflow-y-auto px-4 py-6">
+            {chat.messages.length === 0 ? (
+              <EmptyState />
             ) : (
-              <Button type="button" variant="secondary" size="sm" onClick={chat.retry} disabled={!chat.lastError}>
-                <RefreshCw size={14} aria-hidden="true" />
-                重试
-              </Button>
+              <div className="mx-auto max-w-3xl space-y-6">
+                {chat.messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    copied={copiedAnswerId === message.id}
+                    onCopy={() => onCopyAnswer(message)}
+                    onFeedback={(rating) => onFeedback(message, rating)}
+                    onToggleFavorite={() => onToggleFavorite(message.id)}
+                  />
+                ))}
+                {chat.status === "streaming" ? <TypingIndicator events={chat.events} /> : null}
+              </div>
             )}
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfc_55%,#f4f8fa_100%)] px-4 py-5">
-          {chat.messages.length === 0 ? (
-            <EmptyState onPick={(example) => onInput(example)} />
-          ) : (
-            <div className="mx-auto max-w-4xl space-y-5">
-              {chat.messages.map((message) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  copied={copiedAnswerId === message.id}
-                  onCopy={() => onCopyAnswer(message)}
-                  onFeedback={(rating) => onFeedback(message, rating)}
-                  onToggleFavorite={() => onToggleFavorite(message.id)}
-                />
-              ))}
-              {chat.status === "streaming" ? <TypingIndicator events={chat.events} /> : null}
-            </div>
-          )}
-        </div>
 
         {chat.lastError ? (
           <div className="mx-4 mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
@@ -528,9 +508,20 @@ function ChatWorkspaceView({
         <Composer input={input} status={chat.status} onInput={onInput} onSubmit={onSubmit} />
       </section>
 
-      <aside className="hidden min-h-0 min-w-0 gap-4 overflow-hidden lg:grid lg:grid-rows-[minmax(0,1fr)_196px]">
-        <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} />
-        <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} />
+      <aside
+        className={cn(
+          "hidden min-h-0 min-w-0 overflow-hidden transition-all duration-300 ease-out lg:grid",
+          sourcesCollapsed ? "grid-rows-1" : "gap-3 lg:grid-rows-[minmax(0,1fr)_210px]",
+        )}
+      >
+        {sourcesCollapsed ? (
+          <CollapsedRightRail onToggle={onToggleSources} sources={currentSources.length} />
+        ) : (
+          <>
+            <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} onCollapse={onToggleSources} />
+            <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} />
+          </>
+        )}
       </aside>
 
       <section className="min-h-0 overflow-y-auto lg:hidden">
@@ -558,6 +549,7 @@ function ChatWorkspaceView({
         {mobileTab === "sources" ? <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} /> : null}
         {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} /> : null}
       </section>
+      </div>
     </div>
   );
 }
@@ -1772,13 +1764,14 @@ function ProductSidebar({
           <button
             type="button"
             className={cn(
-              "hidden h-9 w-9 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)] lg:flex",
+              "hidden h-9 w-9 items-center justify-center rounded-xl text-[var(--muted)] transition hover:bg-white hover:text-[var(--foreground)] hover:shadow-sm lg:flex",
               collapsed ? "" : "border border-[var(--border)] bg-white/70",
             )}
             onClick={onToggleCollapse}
             aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
           >
-            <Menu size={18} aria-hidden="true" />
+            {collapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
           </button>
           <button
             type="button"
@@ -1963,8 +1956,8 @@ function ProductHeader({
   onExpandSidebar: () => void;
 }) {
   return (
-    <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/88 backdrop-blur-xl">
-      <div className="flex h-14 items-center justify-between gap-3 px-3 sm:px-5 lg:px-5">
+    <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
+      <div className="flex h-12 items-center justify-between gap-3 px-3 sm:px-5 lg:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
@@ -1982,13 +1975,13 @@ function ProductHeader({
               aria-label="展开侧栏"
               title="展开侧栏"
             >
-              <Menu size={18} aria-hidden="true" />
+              <PanelLeftOpen size={18} aria-hidden="true" />
             </button>
           ) : null}
-          <div className="hidden min-w-0 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 py-2 shadow-sm md:flex">
+          <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 shadow-sm md:flex">
             <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
             <span className="truncate text-sm text-[var(--muted)]">搜索会话、文档或引用来源</span>
-            <span className="ml-8 rounded border border-[var(--border)] bg-[var(--panel-muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+            <span className="ml-8 rounded-md border border-[var(--border)] bg-[var(--panel-muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
               ⌘ /
             </span>
           </div>
@@ -1999,16 +1992,15 @@ function ProductHeader({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="hidden h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-3 text-xs shadow-sm lg:flex">
+          <div className="hidden h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm lg:flex">
             <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
-            <span className="text-[var(--muted)]">知识库状态</span>
             <span className="font-medium text-[var(--accent-strong)]">正常</span>
           </div>
-          <Button type="button" variant="ghost" size="icon" title="帮助">
+          <Button type="button" variant="ghost" size="icon" title="帮助" className="h-8 w-8">
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
           <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
-          <Button type="button" variant="secondary" size="sm" title={`${user.name} · 退出登录`} onClick={onSignOut}>
+          <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
           </Button>
@@ -2026,65 +2018,9 @@ function IconTooltip({ label }: { label: string }) {
   );
 }
 
-function ChatHeroStats({
-  stats,
-}: {
-  stats: {
-    turns: number;
-    sources: number;
-    totalElapsed?: number;
-    boundary?: boolean;
-  };
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-2 border-b border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfd_100%)] p-2.5 sm:grid-cols-4">
-      <MetricCard icon={MessageSquareText} label="会话轮次" value={`${stats.turns}`} />
-      <MetricCard icon={FileText} label="引用来源" value={`${stats.sources}`} />
-      <MetricCard icon={Clock3} label="响应耗时" value={formatSeconds(stats.totalElapsed)} />
-      <MetricCard
-        icon={ShieldCheck}
-        label="边界状态"
-        value={stats.boundary === undefined ? "待判断" : stats.boundary ? "范围内" : "已熔断"}
-        tone={stats.boundary === false ? "warning" : "normal"}
-      />
-    </div>
-  );
-}
-
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  tone = "normal",
-}: {
-  icon: typeof MessageSquareText;
-  label: string;
-  value: string;
-  tone?: "normal" | "warning";
-}) {
-  return (
-    <div className="group flex min-h-[58px] items-center gap-2.5 rounded-md border border-[var(--border)] bg-white px-3 shadow-sm transition hover:border-[var(--border-strong)] hover:shadow-md">
-      <div
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
-          tone === "warning"
-            ? "bg-[var(--warning-soft)] text-[var(--warning)]"
-            : "bg-[var(--accent-tint)] text-[var(--accent-strong)]",
-        )}
-      >
-        <Icon size={16} aria-hidden="true" />
-      </div>
-      <div className="min-w-0">
-        <p className="truncate text-xs text-[var(--muted)]">{label}</p>
-        <p className="truncate text-sm font-semibold">{value}</p>
-      </div>
-    </div>
-  );
-}
-
 function HealthPill({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <div className="flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-2 text-xs shadow-sm">
+    <div className="flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm">
       <HeartPulse size={14} className={ok ? "text-[var(--accent)]" : "text-[var(--danger)]"} />
       <span className="hidden max-w-[120px] truncate text-[var(--muted)] sm:inline">{label}</span>
       <span className={ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}>
@@ -2149,25 +2085,104 @@ function KnowledgeBaseSelect({
   selectedId: string;
   onSelect: (knowledgeBaseId: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const visibleKnowledgeBases = knowledgeBases.filter((item) => item.status === "active");
   const options = visibleKnowledgeBases.length ? visibleKnowledgeBases : knowledgeBases;
+  const selectedKnowledgeBase = options.find((item) => item.id === selectedId) ?? options[0] ?? DEFAULT_KNOWLEDGE_BASE;
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   return (
-    <label className="hidden h-8 items-center gap-2 rounded-md border border-[var(--border)] bg-white px-2 text-xs text-[var(--muted)] shadow-sm sm:flex">
-      <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
-      <select
-        value={selectedId}
+    <div ref={containerRef} className="relative hidden sm:block">
+      <button
+        type="button"
         aria-label="选择知识库"
-        onChange={(event) => onSelect(event.target.value)}
-        className="max-w-[180px] bg-transparent text-xs font-medium text-[var(--foreground)] outline-none"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="group flex h-11 max-w-[260px] items-center gap-2 rounded-full border border-white/80 bg-white/86 px-4 text-sm font-semibold text-[var(--foreground)] shadow-[0_14px_36px_rgba(15,23,42,0.10)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-white hover:bg-white hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)]"
       >
-        {options.map((knowledgeBase) => (
-          <option key={knowledgeBase.id} value={knowledgeBase.id}>
-            {knowledgeBase.name}
-          </option>
-        ))}
-      </select>
-    </label>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--accent-soft)] bg-white text-[var(--accent)]">
+          <Database size={16} aria-hidden="true" />
+        </span>
+        <span className="truncate">{selectedKnowledgeBase.name}</span>
+        <ChevronRight
+          size={16}
+          className={cn(
+            "shrink-0 rotate-90 text-[var(--muted)] transition duration-200 group-hover:text-[var(--foreground)]",
+            open ? "-rotate-90" : "",
+          )}
+          aria-hidden="true"
+        />
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-72 overflow-hidden rounded-3xl border border-white/80 bg-white/96 p-2 shadow-[0_28px_80px_rgba(15,23,42,0.18)] backdrop-blur-2xl">
+          <div className="px-3 py-2">
+            <p className="text-xs font-medium text-[var(--muted)]">当前知识库</p>
+          </div>
+          <div className="space-y-1">
+            {options.map((knowledgeBase) => {
+              const active = knowledgeBase.id === selectedId;
+              return (
+                <button
+                  key={knowledgeBase.id}
+                  type="button"
+                  onClick={() => {
+                    onSelect(knowledgeBase.id);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition",
+                    active
+                      ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]"
+                      : "text-[var(--foreground)] hover:bg-[var(--panel-muted)]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border bg-white",
+                      active ? "border-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--muted)]",
+                    )}
+                  >
+                    {active ? <CheckCircle2 size={15} aria-hidden="true" /> : <Database size={15} aria-hidden="true" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{knowledgeBase.name}</span>
+                    <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">
+                      {indexStatusLabel(knowledgeBase.index_status)} · {knowledgeBase.document_count} 个文档
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2449,46 +2464,19 @@ function StatusBadge({ status }: { status: "idle" | "streaming" | "error" }) {
   );
 }
 
-function EmptyState({ onPick }: { onPick: (example: string) => void }) {
+function EmptyState() {
   return (
-    <div className="mx-auto flex max-w-4xl flex-col py-5 sm:py-7">
-      <div className="max-w-2xl">
-        <div className="mb-3 inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border)] bg-white px-3 text-sm text-[var(--muted)] shadow-sm">
-          <Sparkles size={15} className="text-[var(--accent)]" aria-hidden="true" />
-          混合检索 · 边界熔断 · 引用追溯
+    <div className="mx-auto flex h-full min-h-[420px] max-w-3xl flex-col items-center justify-center px-4 py-10 text-center">
+      <div className="rounded-[28px] border border-white/72 bg-white/54 px-8 py-7 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--accent-soft)] bg-white/82 text-[var(--accent-strong)] shadow-sm">
+          <Sparkles size={20} aria-hidden="true" />
         </div>
-        <h2 className="text-2xl font-semibold tracking-normal sm:text-[28px]">
-          从可信资料库开始一次专业问答
+        <h2 className="text-2xl font-semibold tracking-normal sm:text-[30px]">
+          有什么需要查询？
         </h2>
-        <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--muted)]">
-          选择一个业务问题，系统会实时展示检索路径、边界判断和引用来源。
+        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">
+          输入问题后，系统会自动检索知识库、生成回答并保留可追溯引用。
         </p>
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-2">
-        {EXAMPLES.map((example) => (
-          <button
-            key={example.query}
-            type="button"
-            onClick={() => onPick(example.query)}
-            className="group min-h-[96px] rounded-lg border border-[var(--border)] bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{example.title}</p>
-                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{example.query}</p>
-              </div>
-              <ChevronRight
-                size={17}
-                className="mt-0.5 shrink-0 text-[var(--muted)] transition group-hover:text-[var(--accent)]"
-                aria-hidden="true"
-              />
-            </div>
-            <span className="mt-3 inline-flex rounded-sm bg-[var(--panel-strong)] px-2 py-1 text-xs text-[var(--muted)]">
-              {example.meta}
-            </span>
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -2511,30 +2499,30 @@ function MessageBubble({
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser ? (
-        <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0b877a_0%,#04524c_100%)] text-white shadow-md shadow-teal-950/10">
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur">
           <Bot size={17} aria-hidden="true" />
         </div>
       ) : null}
       <article
         className={cn(
-          "group max-w-[min(780px,92%)] rounded-lg border px-4 py-3 text-sm leading-6 shadow-sm",
+          "group max-w-[min(720px,92%)] text-[15px] leading-7",
           isUser
-            ? "border-[var(--accent)] bg-[linear-gradient(180deg,#eaf8f5_0%,#dff3f0_100%)] text-[var(--foreground)]"
-            : "border-[var(--border)] bg-white text-[var(--foreground)] shadow-[var(--shadow-soft)]",
+            ? "rounded-3xl border border-[var(--accent-soft)] bg-white/78 px-5 py-3 text-[var(--foreground)] shadow-sm backdrop-blur"
+            : "text-[var(--foreground)]",
         )}
       >
         <div className="whitespace-pre-wrap break-words">{message.content || "..."}</div>
         {!isUser && message.sources?.length ? (
-          <div className="mt-3 flex flex-wrap gap-1.5 text-xs text-[var(--accent-strong)]">
+          <div className="mt-4 flex flex-wrap gap-1.5 text-xs text-[var(--accent-strong)]">
             {message.sources.map((source) => (
-              <span key={source.chunk_id} className="rounded-sm border border-[var(--border)] bg-[var(--accent-tint)] px-1.5 py-0.5">
+              <span key={source.chunk_id} className="rounded-full border border-[var(--accent-soft)] bg-white/72 px-2 py-0.5">
                 [{source.index}] {source.title}
               </span>
             ))}
           </div>
         ) : null}
         {!isUser ? (
-          <div className="mt-3 flex items-center gap-1 border-t border-[var(--border)] pt-2 text-[var(--muted)]">
+          <div className="mt-3 flex items-center gap-1 text-[var(--muted)] opacity-75 transition group-hover:opacity-100">
             <IconAction label={copied ? "已复制" : "复制回答"} onClick={onCopy} icon={Copy} />
             <IconAction
               label={message.favorite ? "已收藏" : "收藏回答"}
@@ -2615,8 +2603,8 @@ function Composer({
   onSubmit: (event: FormEvent) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="shrink-0 border-t border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f7fafb_100%)] p-3">
-      <div className="rounded-lg border border-[var(--border)] bg-white p-2 shadow-[var(--shadow-soft)] transition focus-within:border-[var(--accent)]">
+    <form onSubmit={onSubmit} className="shrink-0 px-4 pb-4">
+      <div className="mx-auto max-w-3xl rounded-[26px] border border-white/80 bg-white/88 p-3 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-xl transition focus-within:border-white focus-within:bg-white focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)]">
         <textarea
           value={input}
           onChange={(event) => onInput(event.target.value)}
@@ -2627,23 +2615,17 @@ function Composer({
             }
           }}
           placeholder="输入校园资料库相关问题..."
-          className="min-h-10 w-full resize-none border-0 bg-transparent px-2 py-1.5 text-sm leading-6 text-[var(--foreground)] outline-none"
-          rows={1}
+          className="chat-composer-input min-h-16 w-full resize-none border-0 bg-transparent px-3 py-2 text-base leading-7 text-[var(--foreground)] outline-none placeholder:text-slate-400"
+          rows={2}
           maxLength={2000}
         />
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-2 pt-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-            <ComposerTool icon={Layers3} label="选择引用来源" />
-            <ComposerTool icon={Wifi} label="开启联网" />
-            <span className="hidden sm:inline">Enter 发送，Shift + Enter 换行</span>
-          </div>
-          <Button type="submit" variant="primary" disabled={status === "streaming"}>
+        <div className="flex items-center justify-end px-1 pt-1">
+          <Button type="submit" variant="primary" size="icon" className="h-11 w-11 rounded-full" disabled={status === "streaming"} title="发送" aria-label="发送">
             {status === "streaming" ? (
               <Loader2 className="animate-spin" size={16} aria-hidden="true" />
             ) : (
               <Send size={16} aria-hidden="true" />
             )}
-            发送
           </Button>
         </div>
       </div>
@@ -2651,38 +2633,34 @@ function Composer({
   );
 }
 
-function ComposerTool({ icon: Icon, label }: { icon: typeof Layers3; label: string }) {
-  return (
-    <button
-      type="button"
-      className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-[var(--muted)] transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]"
-    >
-      <Icon size={14} aria-hidden="true" />
-      {label}
-    </button>
-  );
-}
-
 function SourcePanel({
   sources,
   knowledgeBases,
+  onCollapse,
 }: {
   sources: Source[];
   knowledgeBases: KnowledgeBase[];
+  onCollapse?: () => void;
 }) {
   const nameById = new Map(knowledgeBases.map((knowledgeBase) => [knowledgeBase.id, knowledgeBase.name]));
 
   return (
-    <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
-      <CardHeader className="shrink-0">
-        <div className="flex items-center justify-between">
+    <Card className="flex min-h-0 flex-col overflow-hidden border-white/72 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+      <CardHeader className="shrink-0 py-3">
+        <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">引用来源</h2>
-            <p className="text-xs text-[var(--muted)]">{sources.length} 条来源 · 可复制原文片段</p>
+            <p className="text-xs text-[var(--muted)]">{sources.length} 条来源</p>
           </div>
-          <FileText size={18} className="text-[var(--accent)]" aria-hidden="true" />
+          {onCollapse ? (
+            <Button type="button" variant="ghost" size="icon" title="收起引用来源" aria-label="收起引用来源" onClick={onCollapse}>
+              <PanelRightClose size={16} aria-hidden="true" />
+            </Button>
+          ) : (
+            <FileText size={18} className="text-[var(--accent)]" aria-hidden="true" />
+          )}
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
           <SourceFilter active label="全部" count={sources.length} />
           <SourceFilter label="文档" count={sources.length} />
           <SourceFilter label="网页" count={0} />
@@ -2700,7 +2678,7 @@ function SourcePanel({
             {sources.map((source) => (
               <article
                 key={source.chunk_id}
-                className="rounded-lg border border-[var(--border)] bg-white p-3 shadow-sm transition hover:border-[var(--accent)]"
+                className="rounded-2xl border border-white/80 bg-white/76 p-3 shadow-sm transition hover:border-[var(--accent-soft)] hover:bg-white"
               >
                 <div className="mb-2 flex items-start gap-3">
                   <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--info-soft)] text-xs font-semibold text-[var(--info)]">
@@ -2754,6 +2732,30 @@ function SourceFilter({
   );
 }
 
+function CollapsedRightRail({ onToggle, sources }: { onToggle: () => void; sources: number }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-between rounded-2xl border border-white/72 bg-white/62 py-3 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-[var(--muted)] transition hover:bg-white hover:text-[var(--foreground)] hover:shadow-sm"
+        aria-label="展开引用来源"
+      >
+        <PanelRightOpen size={18} aria-hidden="true" />
+        <IconTooltip label="展开引用来源" />
+      </button>
+      <div className="flex flex-col items-center gap-3 text-[var(--muted)]">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white/72">
+          <FileText size={17} aria-hidden="true" />
+        </div>
+        <span className="rounded-full border border-[var(--accent-soft)] bg-white/76 px-2 py-1 text-xs font-semibold text-[var(--accent-strong)]">
+          {sources}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function ProcessPanel({
   events,
   metadata,
@@ -2782,8 +2784,8 @@ function ProcessPanel({
   const displayEvent = statusByStage.get(displayStage.id);
   const DisplayIcon = displayStage.icon;
   return (
-    <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
-      <CardHeader className="shrink-0 border-b-0 px-4 py-2">
+    <Card className="flex min-h-0 flex-col overflow-hidden border-white/72 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+      <CardHeader className="shrink-0 border-b-0 px-4 pb-2 pt-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">检索过程</h2>
@@ -2811,10 +2813,10 @@ function ProcessPanel({
           })}
         </div>
       </CardHeader>
-      <CardContent className="min-h-0 flex-1 px-4 pb-3 pt-0">
-        <div className="relative h-full overflow-hidden rounded-lg border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f8fbfc_55%,#f2f7f8_100%)] p-2.5 shadow-sm">
+      <CardContent className="px-4 pb-4 pt-0">
+        <div className="relative min-h-[118px] overflow-hidden rounded-2xl border border-white/80 bg-[linear-gradient(135deg,#ffffff_0%,#f8fbfc_55%,#f2f7f8_100%)] p-3 shadow-sm">
           <div className="pointer-events-none absolute -right-12 -top-16 h-28 w-28 rounded-full bg-[rgba(0,108,99,0.12)] blur-3xl motion-safe:animate-[ambientBreath_5.2s_ease-in-out_infinite]" />
-          <div className="relative grid h-full grid-cols-[42px_minmax(0,1fr)] gap-3">
+          <div className="relative grid grid-cols-[42px_minmax(0,1fr)] gap-3">
             <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white text-[var(--accent)] shadow-sm">
               <span className="absolute inset-[-6px] rounded-2xl border border-[var(--accent-soft)] opacity-80 motion-safe:animate-[traceBreath_2.8s_ease-in-out_infinite]" />
               <DisplayIcon size={19} className="relative" aria-hidden="true" />

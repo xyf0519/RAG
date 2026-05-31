@@ -149,10 +149,10 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    expect(screen.getByRole("heading", { name: "xyfRAG" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "xyfRAG" }).length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText("输入校园资料库相关问题...")).toBeInTheDocument();
-    expect(screen.getByText("可信问答工作台")).toBeInTheDocument();
-    expect(screen.getByText("挂科后什么时候申请补考？")).toBeInTheDocument();
+    expect(screen.getByText("有什么需要查询？")).toBeInTheDocument();
+    expect(screen.queryByText("挂科后什么时候申请补考？")).not.toBeInTheDocument();
   });
 
   it("opens the admin knowledge add workspace", () => {

@@ -68,6 +68,10 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+.chat-composer-input:focus-visible {
+  outline: none;
+}
+
 ::selection {
   background: var(--accent-soft);
 }
@@ -147,6 +151,15 @@ input:focus-visible {
     linear-gradient(90deg, #8ee3d8 0%, #006c63 52%, #8ee3d8 100%);
   background-size: 180% 100%;
   animation: boundaryMeterBreath 2.6s ease-in-out infinite;
+}
+
+.chat-scroll {
+  overscroll-behavior: contain;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: rgba(101, 115, 132, 0.48);
+  border-width: 4px;
 }
 
 .line-clamp-2 {
