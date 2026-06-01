@@ -39,6 +39,8 @@
 
 第一次拉取项目、配置 API、本地 BGE 模型、边界二分类器和知识库扩充，请先看 [新手启动与扩展指南](docs/NEW_USER_GUIDE.md)。
 
+本分支是 localhost 本地版本的冻结分支。只在本机运行时，也可以直接参考 [Localhost 使用说明](docs/LOCALHOST.md)。
+
 后端：
 
 ```bash
