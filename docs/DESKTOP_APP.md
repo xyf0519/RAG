@@ -72,8 +72,16 @@ npm run desktop:dist
 web/dist/
 ```
 
+打包命令会先运行 `scripts/build_desktop_backend.sh`，用 PyInstaller 生成 `web/build/backend/xyfrag-backend`，再把它放进安装包。用户打开 App 时不需要手动安装 Python 或后端依赖。
+
+## 首次启动
+
+- App 会创建本机数据目录，并自动复制默认资料、创建默认知识库、构建索引。
+- 桌面模式默认关闭边界分类器，个人资料库问题会直接进入检索问答。
+- 首次启动不强制下载 BGE 1.5 模型；默认使用内置 hashing embedding 与 lexical reranker，保证直接进入工作台。
+- 桌面日志写入 macOS `~/Library/Application Support/xyfRAG/rag-data/logs/`，便于排查启动失败。
+
 ## 注意
 
-- 当前打包脚本会把 Python 后端源码、默认资料和前端产物放进安装包，但目标机器仍需要可用 Python 运行时，或后续改成 PyInstaller/Nuitka 打包后端二进制。
 - Windows 和 macOS 最好分别在对应系统上构建，以减少签名、权限和二进制兼容问题。
 - 模型权重默认不捆绑进安装包，用户可按需下载到桌面数据目录或使用 hashing fallback。

@@ -1,8 +1,11 @@
 .env
+.DS_Store
 .venv/
 .venv-test/
 __pycache__/
 *.py[cod]
+build/
+dist/
 
 logs/*.out
 logs/*.log
@@ -19,6 +22,7 @@ models/huggingface/
 web/.next/
 web/.env.local
 web/node_modules/
+web/build/backend/
 web/playwright-report/
 web/test-results/
 web/tsconfig.tsbuildinfo
