@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.metadata as importlib_metadata
+import importlib.util as importlib_util
 import logging
 import json
 import os
 import re
 import shutil
+import threading
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -59,6 +62,9 @@ DESKTOP_EMBEDDING_MODELS = {
     },
 }
 DEFAULT_DESKTOP_EMBEDDING_MODEL = "bge-small-zh-v1.5"
+DESKTOP_MODEL_JOBS: dict[str, dict[str, object]] = {}
+DESKTOP_MODEL_JOB_LOCK = threading.Lock()
+DESKTOP_BGE_RUNTIME_AVAILABLE: Optional[bool] = None
 
 
 def is_desktop_mode() -> bool:
@@ -131,7 +137,11 @@ def apply_desktop_embedding_config(config: dict[str, str] | None = None) -> None
         model_path = desktop_model_path(model_key)
     except KeyError:
         return
-    if not desktop_embedding_enabled(config) or not desktop_model_downloaded(model_key):
+    if (
+        not desktop_embedding_enabled(config)
+        or not desktop_model_downloaded(model_key)
+        or not desktop_bge_runtime_available()
+    ):
         os.environ["XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"] = "0"
         return
     os.environ["XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"] = "1"
@@ -154,11 +164,90 @@ def desktop_model_size(model_key: str) -> int:
 
 
 def desktop_bge_runtime_available() -> bool:
+    global DESKTOP_BGE_RUNTIME_AVAILABLE
+    if DESKTOP_BGE_RUNTIME_AVAILABLE is not None:
+        return DESKTOP_BGE_RUNTIME_AVAILABLE
     try:
-        from FlagEmbedding import FlagModel  # noqa: F401
+        from packaging.version import Version
+
+        required_modules = (
+            "FlagEmbedding",
+            "sentence_transformers",
+            "torch",
+            "transformers",
+            "tokenizers",
+            "safetensors",
+            "huggingface_hub",
+        )
+        if any(importlib_util.find_spec(module_name) is None for module_name in required_modules):
+            DESKTOP_BGE_RUNTIME_AVAILABLE = False
+            return DESKTOP_BGE_RUNTIME_AVAILABLE
+        try:
+            hub_version = importlib_metadata.version("huggingface-hub")
+        except importlib_metadata.PackageNotFoundError:
+            import huggingface_hub
+
+            hub_version = getattr(huggingface_hub, "__version__", "0")
+        DESKTOP_BGE_RUNTIME_AVAILABLE = Version(hub_version) >= Version("0.34.0")
     except Exception:
-        return False
-    return True
+        DESKTOP_BGE_RUNTIME_AVAILABLE = False
+    return DESKTOP_BGE_RUNTIME_AVAILABLE
+
+
+def desktop_model_job_response(job: dict[str, object] | None) -> dict[str, object] | None:
+    if not job:
+        return None
+    return {
+        "id": str(job.get("id", "")),
+        "model_key": str(job.get("model_key", "")),
+        "status": str(job.get("status", "idle")),
+        "progress": int(job.get("progress", 0)),
+        "message": str(job.get("message", "")),
+        "error": str(job.get("error", "")),
+        "started_at": float(job["started_at"]) if job.get("started_at") else None,
+        "finished_at": float(job["finished_at"]) if job.get("finished_at") else None,
+    }
+
+
+def latest_desktop_model_job(model_key: str) -> dict[str, object] | None:
+    with DESKTOP_MODEL_JOB_LOCK:
+        jobs = [
+            dict(job)
+            for job in DESKTOP_MODEL_JOBS.values()
+            if job.get("model_key") == model_key
+        ]
+    if not jobs:
+        return None
+    jobs.sort(key=lambda job: float(job.get("started_at", 0)), reverse=True)
+    return jobs[0]
+
+
+def update_desktop_model_job(job_id: str, **values: object) -> dict[str, object] | None:
+    with DESKTOP_MODEL_JOB_LOCK:
+        job = DESKTOP_MODEL_JOBS.get(job_id)
+        if not job:
+            return None
+        job.update(values)
+        return dict(job)
+
+
+def desktop_model_progress_tqdm(job_id: str):
+    from tqdm.auto import tqdm
+
+    class DesktopModelProgress(tqdm):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            update_desktop_model_job(job_id, progress=max(4, int(self.n)), message="正在连接模型仓库。")
+
+        def update(self, n: int | float = 1) -> bool | None:
+            result = super().update(n)
+            total = float(self.total or 0)
+            if total > 0:
+                progress = min(88, max(6, int((float(self.n) / total) * 82) + 6))
+                update_desktop_model_job(job_id, progress=progress, message="正在下载模型文件。")
+            return result
+
+    return DesktopModelProgress
 
 
 def desktop_embedding_model_payload(model_key: str, config: dict[str, str]) -> dict[str, object]:
@@ -174,6 +263,7 @@ def desktop_embedding_model_payload(model_key: str, config: dict[str, str]) -> d
         "runtime_available": desktop_bge_runtime_available(),
         "path": str(desktop_model_path(model_key)),
         "size_bytes": desktop_model_size(model_key),
+        "job": desktop_model_job_response(latest_desktop_model_job(model_key)),
     }
 
 
@@ -190,7 +280,7 @@ def save_desktop_config(values: dict[str, object]) -> dict[str, str]:
     return load_desktop_config()
 
 
-def download_desktop_embedding_model(model_key: str) -> None:
+def download_desktop_embedding_model(model_key: str, job_id: str | None = None) -> None:
     info = desktop_model_info(model_key)
     target_path = desktop_model_path(model_key)
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,23 +290,30 @@ def download_desktop_embedding_model(model_key: str) -> None:
         raise HTTPException(status_code=409, detail="当前后端缺少 huggingface_hub，无法下载模型。") from exc
 
     try:
-        snapshot_download(
-            repo_id=info["repo_id"],
-            local_dir=str(target_path),
-            local_dir_use_symlinks=False,
-            resume_download=True,
-        )
+        download_kwargs: dict[str, object] = {
+            "repo_id": info["repo_id"],
+            "local_dir": str(target_path),
+            "local_dir_use_symlinks": False,
+            "resume_download": True,
+        }
+        if job_id:
+            download_kwargs["tqdm_class"] = desktop_model_progress_tqdm(job_id)
+        snapshot_download(**download_kwargs)
     except Exception as exc:
         if target_path.exists() and not (target_path / "config.json").exists():
             shutil.rmtree(target_path, ignore_errors=True)
         raise HTTPException(status_code=502, detail=f"模型下载失败：{exc}") from exc
 
 
-def activate_desktop_embedding_model(model_key: str) -> None:
+def activate_desktop_embedding_model(model_key: str, job_id: str | None = None) -> None:
+    if job_id:
+        update_desktop_model_job(job_id, progress=91, message="正在启用本地嵌入模型。")
     save_desktop_config({
         "embeddingModelKey": model_key,
         "embeddingUseLocal": "1",
     })
+    if job_id:
+        update_desktop_model_job(job_id, progress=94, message="正在重建本机资料库索引。")
     reset_desktop_runtime_after_embedding_change()
 
 
@@ -232,6 +329,77 @@ def reset_desktop_runtime_after_embedding_change() -> None:
         job = app.state.knowledge_store.create_index_job(DEFAULT_KNOWLEDGE_BASE_ID)
         if job.status != "succeeded":
             raise HTTPException(status_code=500, detail=job.message)
+
+
+def http_exception_message(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    return str(detail or exc)
+
+
+def run_desktop_model_download_job(job_id: str, model_key: str) -> None:
+    try:
+        if not desktop_bge_runtime_available():
+            raise RuntimeError("当前桌面后端未包含 BGE 运行库，请使用包含本地模型运行库的桌面构建。")
+        update_desktop_model_job(job_id, status="running", progress=3, message="正在准备模型下载。", error="")
+        download_desktop_embedding_model(model_key, job_id)
+        if not desktop_model_downloaded(model_key):
+            raise RuntimeError("模型下载不完整，请重新下载。")
+        update_desktop_model_job(job_id, progress=89, message="模型已下载，正在写入配置。")
+        activate_desktop_embedding_model(model_key, job_id)
+    except Exception as exc:
+        logger.error("stage=desktop_model_download model=%s error=%s", model_key, exc, exc_info=True)
+        try:
+            config = load_desktop_config()
+            if config.get("embeddingModelKey") == model_key:
+                save_desktop_config({"embeddingUseLocal": "0"})
+                apply_desktop_config()
+        except Exception:
+            logger.warning("Failed to disable desktop embedding after model setup failure.", exc_info=True)
+        update_desktop_model_job(
+            job_id,
+            status="failed",
+            progress=0,
+            message="模型安装失败。",
+            error=http_exception_message(exc),
+            finished_at=time.time(),
+        )
+        return
+    update_desktop_model_job(
+        job_id,
+        status="succeeded",
+        progress=100,
+        message="模型已安装并启用。",
+        error="",
+        finished_at=time.time(),
+    )
+
+
+def start_desktop_model_download_job(model_key: str) -> dict[str, object]:
+    with DESKTOP_MODEL_JOB_LOCK:
+        for job in DESKTOP_MODEL_JOBS.values():
+            if job.get("model_key") == model_key and job.get("status") == "running":
+                return dict(job)
+        job_id = str(uuid4())
+        job = {
+            "id": job_id,
+            "model_key": model_key,
+            "status": "running",
+            "progress": 1,
+            "message": "已加入模型安装队列。",
+            "error": "",
+            "started_at": time.time(),
+            "finished_at": None,
+        }
+        DESKTOP_MODEL_JOBS[job_id] = job
+
+    thread = threading.Thread(
+        target=run_desktop_model_download_job,
+        args=(job_id, model_key),
+        daemon=True,
+        name=f"desktop-model-download-{model_key}",
+    )
+    thread.start()
+    return dict(job)
 
 
 def verify_internal_api_key(
@@ -466,6 +634,17 @@ class DesktopSettingsResponse(BaseModel):
     updated_at: Optional[float] = None
 
 
+class DesktopModelJobResponse(BaseModel):
+    id: str
+    model_key: str
+    status: Literal["idle", "running", "succeeded", "failed"]
+    progress: int = Field(default=0, ge=0, le=100)
+    message: str = ""
+    error: str = ""
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+
+
 class DesktopEmbeddingModelResponse(BaseModel):
     key: str
     label: str
@@ -475,6 +654,7 @@ class DesktopEmbeddingModelResponse(BaseModel):
     runtime_available: bool
     path: str
     size_bytes: int
+    job: Optional[DesktopModelJobResponse] = None
 
 
 class DesktopEmbeddingModelsResponse(BaseModel):
@@ -777,9 +957,8 @@ async def update_desktop_embedding_model(
                 status_code=409,
                 detail="当前桌面后端未包含 BGE 运行库，请使用包含本地模型运行库的桌面构建。",
             )
-        await run_in_threadpool(download_desktop_embedding_model, request.model_key)
-        await run_in_threadpool(activate_desktop_embedding_model, request.model_key)
-        message = "模型已下载并启用。"
+        start_desktop_model_download_job(request.model_key)
+        message = "模型开始下载。"
     elif request.action == "activate":
         if not desktop_model_downloaded(request.model_key):
             raise HTTPException(status_code=400, detail="模型尚未下载。")
@@ -788,7 +967,7 @@ async def update_desktop_embedding_model(
                 status_code=409,
                 detail="当前桌面后端未包含 BGE 运行库，请使用包含本地模型运行库的桌面构建。",
             )
-        await run_in_threadpool(activate_desktop_embedding_model, request.model_key)
+        await run_in_threadpool(activate_desktop_embedding_model, request.model_key, None)
         message = "模型已启用。"
     else:
         save_desktop_config({"embeddingUseLocal": "0"})

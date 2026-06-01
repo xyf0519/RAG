@@ -93,7 +93,7 @@ def ensure_default_workspace() -> None:
     if knowledge_base.index_status != "ready":
         job = store.create_index_job(DEFAULT_KNOWLEDGE_BASE_ID)
         if job.status != "succeeded":
-            raise RuntimeError(job.message)
+            logger.warning("Default desktop index build failed during startup: %s", job.message)
 
 
 def main() -> None:

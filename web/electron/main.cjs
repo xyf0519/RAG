@@ -4,14 +4,16 @@ const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 
-const BACKEND_PORT = Number(process.env.XYFRAG_DESKTOP_BACKEND_PORT || 8765);
-const FRONTEND_PORT = Number(process.env.XYFRAG_DESKTOP_FRONTEND_PORT || 3765);
+const PREFERRED_BACKEND_PORT = Number(process.env.XYFRAG_DESKTOP_BACKEND_PORT || 8765);
+const PREFERRED_FRONTEND_PORT = Number(process.env.XYFRAG_DESKTOP_FRONTEND_PORT || 3765);
 
 app.setName("Maverella");
 
 let backendProcess = null;
 let frontendProcess = null;
 let mainWindow = null;
+let backendPort = PREFERRED_BACKEND_PORT;
+let frontendPort = PREFERRED_FRONTEND_PORT;
 
 function getRepoRoot() {
   if (!app.isPackaged) {
@@ -42,6 +44,15 @@ function getDesktopLogPath() {
   const root = path.join(app.getPath("userData"), "rag-data", "logs");
   fs.mkdirSync(root, { recursive: true });
   return path.join(root, "desktop-processes.log");
+}
+
+function appendDesktopLog(message) {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  if (app.isReady() || app.isPackaged) {
+    fs.appendFileSync(getDesktopLogPath(), line);
+  } else {
+    console.log(line.trim());
+  }
 }
 
 function copyDirectoryIfEmpty(source, target) {
@@ -100,6 +111,7 @@ function spawnLogged(command, args, options) {
     windowsHide: true,
   });
   child.on("exit", (code) => {
+    appendDesktopLog(`process exited command=${command} code=${code}`);
     if (!app.isQuitting && code !== 0 && code !== null) {
       console.error(`${command} exited with ${code}`);
     }
@@ -107,15 +119,20 @@ function spawnLogged(command, args, options) {
   return child;
 }
 
-async function waitForPort(port, host = "127.0.0.1", timeoutMs = 60_000) {
+async function waitForHttp(url, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await canConnect(port, host)) {
-      return;
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return response;
+      }
+    } catch {
+      // Keep polling until the child process finishes booting.
     }
     await new Promise((resolve) => setTimeout(resolve, 350));
   }
-  throw new Error(`Timed out waiting for ${host}:${port}`);
+  throw new Error(`Timed out waiting for ${url}`);
 }
 
 function canConnect(port, host) {
@@ -134,10 +151,48 @@ function canConnect(port, host) {
   });
 }
 
+async function backendHealthy(port) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    if (!response.ok) {
+      return false;
+    }
+    const data = await response.json();
+    return data && data.ok === true && data.app === "Maverella";
+  } catch {
+    return false;
+  }
+}
+
+function freePort(preferredPort) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", () => {
+      const fallback = net.createServer();
+      fallback.unref();
+      fallback.on("error", reject);
+      fallback.listen(0, "127.0.0.1", () => {
+        const address = fallback.address();
+        const port = typeof address === "object" && address ? address.port : preferredPort;
+        fallback.close(() => resolve(port));
+      });
+    });
+    server.listen(preferredPort, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : preferredPort;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 async function startBackend() {
-  if (await canConnect(BACKEND_PORT, "127.0.0.1")) {
+  if (await backendHealthy(PREFERRED_BACKEND_PORT)) {
+    backendPort = PREFERRED_BACKEND_PORT;
+    appendDesktopLog(`reusing healthy backend port=${backendPort}`);
     return;
   }
+  backendPort = await freePort(PREFERRED_BACKEND_PORT);
 
   const repoRoot = getRepoRoot();
   const dataRoot = getUserDataRoot();
@@ -153,7 +208,7 @@ async function startBackend() {
     XYFRAG_DATA_DIR: path.join(dataRoot, "data"),
     XYFRAG_MODELS_DIR: path.join(dataRoot, "models"),
     XYFRAG_LOGS_DIR: path.join(dataRoot, "logs"),
-    RAG_BACKEND_URL: `http://127.0.0.1:${BACKEND_PORT}`,
+    RAG_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
   };
 
   const backendCommand = pickPython();
@@ -162,7 +217,7 @@ async function startBackend() {
         "--host",
         "127.0.0.1",
         "--port",
-        String(BACKEND_PORT),
+        String(backendPort),
         "--data-dir",
         path.join(dataRoot, "data"),
         "--models-dir",
@@ -170,16 +225,17 @@ async function startBackend() {
         "--logs-dir",
         path.join(dataRoot, "logs"),
       ]
-    : ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)];
+    : ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(backendPort)];
 
+  appendDesktopLog(`starting backend command=${backendCommand} port=${backendPort} packaged=${app.isPackaged}`);
   backendProcess = spawnLogged(backendCommand, backendArgs, { cwd: repoRoot, env });
-  await waitForPort(BACKEND_PORT, "127.0.0.1", 180_000);
+  await waitForHttp(`http://127.0.0.1:${backendPort}/health`, 240_000);
 }
 
 async function startFrontend() {
-  if (await canConnect(FRONTEND_PORT, "127.0.0.1")) {
-    return;
-  }
+  frontendPort = await canConnect(PREFERRED_FRONTEND_PORT, "127.0.0.1")
+    ? await freePort(0)
+    : PREFERRED_FRONTEND_PORT;
 
   const webRoot = getWebRoot();
   const env = {
@@ -187,16 +243,17 @@ async function startFrontend() {
     APP_MODE: "desktop",
     NEXT_PUBLIC_APP_MODE: "desktop",
     NODE_ENV: "production",
-    RAG_BACKEND_URL: `http://127.0.0.1:${BACKEND_PORT}`,
+    RAG_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
   };
   const nextBin = path.join(webRoot, "node_modules", "next", "dist", "bin", "next");
 
   frontendProcess = spawnLogged(
     process.execPath,
-    [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(FRONTEND_PORT)],
+    [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(frontendPort)],
     { cwd: webRoot, env: { ...env, ELECTRON_RUN_AS_NODE: "1" } },
   );
-  await waitForPort(FRONTEND_PORT, "127.0.0.1", 120_000);
+  appendDesktopLog(`starting frontend port=${frontendPort} backend_port=${backendPort}`);
+  await waitForHttp(`http://127.0.0.1:${frontendPort}`, 180_000);
 }
 
 function loadingHtml(message) {
@@ -282,7 +339,7 @@ async function boot() {
     await startBackend();
     await showLoading("正在打开工作台。");
     await startFrontend();
-    await mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`);
+    await mainWindow.loadURL(`http://127.0.0.1:${frontendPort}`);
   } catch (error) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       await showLoading("启动失败，请查看本机日志后重试。");

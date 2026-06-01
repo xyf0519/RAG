@@ -62,6 +62,16 @@ if (!canRun(python, ["-m", "PyInstaller", "--version"])) {
   run(python, ["-m", "pip", "install", "-r", "requirements-desktop-build.txt"]);
 }
 
+if (!localModelRuntimeAvailable(python)) {
+  console.log("Installing local BGE runtime for desktop backend.");
+  run(python, ["-m", "pip", "install", "-r", "requirements.txt", "-r", "requirements-local-models.txt"]);
+}
+
+if (!localModelRuntimeAvailable(python)) {
+  console.error("Local BGE runtime is required for desktop packaging but could not be imported.");
+  process.exit(1);
+}
+
 const backendDir = path.join(root, "web", "build", "backend");
 const pyinstallerCacheDir = path.join(root, "build", "pyinstaller-cache");
 fs.rmSync(path.join(root, "build", "pyinstaller"), { recursive: true, force: true });
@@ -96,25 +106,21 @@ const pyinstallerArgs = [
   addData(path.join(root, "data", "raw"), path.join("data", "raw")),
 ];
 
-if (localModelRuntimeAvailable(python)) {
-  pyinstallerArgs.push(
-    "--collect-all",
-    "FlagEmbedding",
-    "--collect-all",
-    "sentence_transformers",
-    "--collect-all",
-    "transformers",
-    "--collect-all",
-    "tokenizers",
-    "--collect-all",
-    "safetensors",
-    "--collect-all",
-    "torch",
-  );
-  console.log("Including local BGE runtime in desktop backend.");
-} else {
-  console.log("Local BGE runtime not installed; backend will support lightweight retrieval only until rebuilt with requirements-local-models.txt.");
-}
+pyinstallerArgs.push(
+  "--collect-all",
+  "FlagEmbedding",
+  "--collect-all",
+  "sentence_transformers",
+  "--collect-all",
+  "transformers",
+  "--collect-all",
+  "tokenizers",
+  "--collect-all",
+  "safetensors",
+  "--collect-all",
+  "torch",
+);
+console.log("Including local BGE runtime in desktop backend.");
 
 pyinstallerArgs.push(path.join(root, "desktop", "backend_entry.py"));
 run(python, pyinstallerArgs, {

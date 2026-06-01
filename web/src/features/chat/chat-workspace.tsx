@@ -2195,6 +2195,18 @@ type DesktopEmbeddingModel = {
   runtime_available: boolean;
   path: string;
   size_bytes: number;
+  job?: DesktopModelJob | null;
+};
+
+type DesktopModelJob = {
+  id: string;
+  model_key: string;
+  status: "idle" | "running" | "succeeded" | "failed";
+  progress: number;
+  message: string;
+  error: string;
+  started_at?: number | null;
+  finished_at?: number | null;
 };
 
 type DesktopEmbeddingModelsResponse = {
@@ -2224,7 +2236,7 @@ function AccountSettingsModal({
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState<ConnectivityTarget | null>(null);
   const [results, setResults] = useState<Partial<Record<ConnectivityTarget, ConnectivityResult>>>({});
-  const [activePanel, setActivePanel] = useState<"settings" | "connection">("settings");
+  const [activePanel, setActivePanel] = useState<"settings" | "connection" | "models">("settings");
   const [settingsError, setSettingsError] = useState("");
   const [embeddingModels, setEmbeddingModels] = useState<DesktopEmbeddingModelsResponse | null>(null);
   const [embeddingBusy, setEmbeddingBusy] = useState<string | null>(null);
@@ -2299,6 +2311,20 @@ function AccountSettingsModal({
   useEffect(() => {
     void refreshEmbeddingModels();
   }, [refreshEmbeddingModels]);
+
+  useEffect(() => {
+    if (!IS_DESKTOP_MODE) {
+      return;
+    }
+    const hasRunningJob = embeddingModels?.models.some((model) => model.job?.status === "running") ?? false;
+    if (!hasRunningJob) {
+      return;
+    }
+    const pollId = window.setInterval(() => {
+      void refreshEmbeddingModels();
+    }, 900);
+    return () => window.clearInterval(pollId);
+  }, [embeddingModels, refreshEmbeddingModels]);
 
   function updateConfig(key: keyof RuntimeConfig, value: string) {
     setSaved(false);
@@ -2441,14 +2467,31 @@ function AccountSettingsModal({
                 <ShieldCheck size={17} aria-hidden="true" />
                 连接
               </button>
+              {IS_DESKTOP_MODE ? (
+                <button
+                  type="button"
+                  onClick={() => setActivePanel("models")}
+                  className={cn(
+                    "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                    activePanel === "models"
+                      ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
+                      : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
+                  )}
+                >
+                  <Database size={17} aria-hidden="true" />
+                  模型
+                </button>
+              ) : null}
             </nav>
           </aside>
 
           <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header className="border-b border-[var(--border)] px-7 py-5">
-              <h2 className="text-xl font-semibold tracking-normal">{activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
+              <h2 className="text-xl font-semibold tracking-normal">
+                {activePanel === "settings" ? "服务设置" : activePanel === "connection" ? "连接测试" : "模型"}
+              </h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                {activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
+                {activePanel === "settings" ? "API 与 URL" : activePanel === "connection" ? "验证当前配置是否可访问" : "下载和启用本地嵌入模型"}
               </p>
             </header>
 
@@ -2497,17 +2540,8 @@ function AccountSettingsModal({
                       </Button>
                     </CardContent>
                   </Card>
-                  {IS_DESKTOP_MODE ? (
-                    <DesktopEmbeddingModelCard
-                      models={embeddingModels}
-                      busy={embeddingBusy}
-                      notice={embeddingNotice}
-                      onAction={runEmbeddingAction}
-                      onRefresh={refreshEmbeddingModels}
-                    />
-                  ) : null}
                 </div>
-              ) : (
+              ) : activePanel === "connection" ? (
                 <Card className="mx-auto min-h-0 max-w-[620px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
                   <CardHeader>
                     <h3 className="text-sm font-semibold">测试</h3>
@@ -2529,6 +2563,16 @@ function AccountSettingsModal({
                     />
                   </CardContent>
                 </Card>
+              ) : (
+                <div className="h-full min-h-0 overflow-y-auto pb-3">
+                  <DesktopEmbeddingModelCard
+                    models={embeddingModels}
+                    busy={embeddingBusy}
+                    notice={embeddingNotice}
+                    onAction={runEmbeddingAction}
+                    onRefresh={refreshEmbeddingModels}
+                  />
+                </div>
               )}
             </div>
           </section>
@@ -2636,11 +2680,11 @@ function DesktopEmbeddingModelCard({
   const actionBusy = Boolean(busy);
 
   return (
-    <Card className="mx-auto mt-4 min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+    <Card className="mx-auto min-h-0 max-w-[620px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold">本地嵌入模型</h3>
+            <h3 className="text-sm font-semibold">模型</h3>
             <p className="mt-1 text-xs text-[var(--muted)]">
               {activeModel ? `${activeModel.label} 已启用` : "默认使用轻量检索"}
             </p>
@@ -2659,8 +2703,37 @@ function DesktopEmbeddingModelCard({
           availableModels.map((model) => {
             const isDefault = model.key === defaultModel?.key;
             const isBusy = busy?.endsWith(`:${model.key}`) ?? false;
+            const job = model.job;
+            const isRunning = job?.status === "running";
+            const isFailed = job?.status === "failed";
+            const progress = Math.max(0, Math.min(100, job?.progress ?? 0));
+            const primaryAction = model.downloaded ? "activate" : "download";
+            const primaryLabel = model.downloaded ? "启用" : "下载";
+            const canUseCard = !actionBusy && !isRunning && model.runtime_available;
             return (
-              <div key={model.key} className="rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] p-4 shadow-sm">
+              <div
+                key={model.key}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  if (canUseCard && !model.enabled) {
+                    void onAction(primaryAction, model.key);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if ((event.key === "Enter" || event.key === " ") && canUseCard && !model.enabled) {
+                    event.preventDefault();
+                    void onAction(primaryAction, model.key);
+                  }
+                }}
+                className={cn(
+                  "rounded-2xl border bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] p-4 shadow-sm outline-none transition",
+                  model.enabled
+                    ? "border-[var(--accent)] ring-1 ring-[rgba(0,108,99,0.12)]"
+                    : "border-[var(--border)] hover:border-[rgba(0,108,99,0.34)] hover:shadow-[0_12px_32px_rgba(15,23,42,0.08)] focus:border-[var(--accent)]",
+                  canUseCard && !model.enabled ? "cursor-pointer" : "cursor-default",
+                )}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -2675,6 +2748,11 @@ function DesktopEmbeddingModelCard({
                           已启用
                         </span>
                       ) : null}
+                      {isRunning ? (
+                        <span className="rounded-full bg-[var(--accent-tint)] px-2 py-0.5 text-[11px] font-semibold text-[var(--accent-strong)]">
+                          安装中
+                        </span>
+                      ) : null}
                     </div>
                     <p className="mt-1 truncate text-xs text-[var(--muted)]">{model.repo_id}</p>
                     <p className="mt-1 text-[11px] text-[var(--muted)]">
@@ -2683,25 +2761,50 @@ function DesktopEmbeddingModelCard({
                   </div>
                   <Database size={18} className={model.enabled ? "text-[var(--accent)]" : "text-[var(--muted)]"} aria-hidden="true" />
                 </div>
+                {isRunning ? (
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between gap-3 text-[11px] font-medium text-[var(--muted)]">
+                      <span className="truncate">{job?.message || "正在安装模型。"}</span>
+                      <span className="shrink-0 tabular-nums text-[var(--accent-strong)]">{progress}%</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--panel-muted)]">
+                      <div
+                        className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e_0%,#22c55e_52%,#67e8f9_100%)] shadow-[0_0_18px_rgba(20,184,166,0.38)] transition-[width] duration-500 ease-out"
+                        style={{ width: `${Math.max(progress, 4)}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {isFailed ? (
+                  <p className="mt-3 rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-xs font-medium text-[var(--danger)]">
+                    {job?.error || "模型安装失败，请重试。"}
+                  </p>
+                ) : null}
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
                     className="justify-center"
-                    disabled={actionBusy}
-                    onClick={() => void onAction(model.downloaded ? "activate" : "download", model.key)}
+                    disabled={actionBusy || isRunning || !model.runtime_available}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onAction(primaryAction, model.key);
+                    }}
                   >
-                    {isBusy ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : model.downloaded ? <CheckCircle2 size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}
-                    {model.downloaded ? "启用" : "下载"}
+                    {isBusy || isRunning ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : model.downloaded ? <CheckCircle2 size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}
+                    {isRunning ? "安装中" : primaryLabel}
                   </Button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     className="justify-center"
-                    disabled={actionBusy || !model.enabled}
-                    onClick={() => void onAction("disable", model.key)}
+                    disabled={actionBusy || isRunning || !model.enabled}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onAction("disable", model.key);
+                    }}
                   >
                     <Square size={14} aria-hidden="true" />
                     轻量模式
