@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
         type: "error",
         payload: {
           code: "UNAUTHORIZED",
-          message: "请先登录。",
+          message: "请先登录或启动桌面模式。",
           retryable: false,
         },
       })}\n`,

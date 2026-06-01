@@ -65,20 +65,24 @@ class OpenAICompatibleClient:
                 structure is invalid.
         """
 
-        if not self._api_key:
+        api_key = os.getenv("OPENAI_API_KEY", self._api_key)
+        base_url = os.getenv("OPENAI_BASE_URL", self._base_url)
+        model = os.getenv("OPENAI_MODEL", self._config.model)
+
+        if not api_key:
             raise LLMClientError("OPENAI_API_KEY is not configured")
 
         payload: dict[str, Any] = {
-            "model": self._config.model,
+            "model": model,
             "messages": messages,
             "temperature": self._config.temperature,
             "max_tokens": self._config.max_tokens,
         }
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        url = f"{self._base_url.rstrip('/')}/chat/completions"
+        url = f"{base_url.rstrip('/')}/chat/completions"
         started_at = time.perf_counter()
 
         try:

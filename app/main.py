@@ -6,8 +6,10 @@ import logging
 import json
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, Union
 from uuid import uuid4
 
@@ -41,9 +43,52 @@ from xyfrag.session import InMemorySessionStore
 logger = logging.getLogger(__name__)
 
 
+def is_desktop_mode() -> bool:
+    return os.getenv("APP_MODE", "").lower() == "desktop" or os.getenv("XYFRAG_DESKTOP", "") == "1"
+
+
+def desktop_config_path() -> Path:
+    configured = os.getenv("XYFRAG_DESKTOP_CONFIG")
+    if configured:
+        return Path(configured)
+    data_dir = os.getenv("XYFRAG_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "desktop-settings.json"
+    return Path.home() / ".xyfrag" / "desktop-settings.json"
+
+
+def load_desktop_config() -> dict[str, str]:
+    path = desktop_config_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items() if value is not None}
+
+
+def apply_desktop_config() -> None:
+    if not is_desktop_mode():
+        return
+    config = load_desktop_config()
+    for env_name, key in {
+        "OPENAI_API_KEY": "apiKey",
+        "OPENAI_BASE_URL": "baseUrl",
+        "OPENAI_MODEL": "model",
+    }.items():
+        value = config.get(key)
+        if value:
+            os.environ[env_name] = value
+
+
 def verify_internal_api_key(
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ) -> None:
+    if is_desktop_mode():
+        return
     expected = os.getenv("INTERNAL_API_KEY", "")
     if expected and x_internal_api_key != expected:
         raise HTTPException(status_code=401, detail="内部服务令牌无效。")
@@ -251,6 +296,20 @@ class UserRoleUpdateRequest(BaseModel):
     role: Literal["user", "admin"]
 
 
+class DesktopSettingsRequest(BaseModel):
+    api_key: str = Field(default="", max_length=400)
+    base_url: str = Field(default="https://api.deepseek.com", max_length=300)
+    model: str = Field(default="deepseek-v4-flash", max_length=120)
+
+
+class DesktopSettingsResponse(BaseModel):
+    ok: bool
+    api_key_configured: bool
+    base_url: str
+    model: str
+    updated_at: Optional[float] = None
+
+
 def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
     """Return a RAG service scoped to one knowledge base.
 
@@ -304,6 +363,7 @@ async def lifespan(app: FastAPI) -> Any:
     """
 
     settings = get_settings()
+    apply_desktop_config()
     configure_logging(settings)
     app.state.sessions = InMemorySessionStore()
     app.state.knowledge_store = KnowledgeBaseStore(settings)
@@ -460,6 +520,51 @@ async def auth_password_reset_confirm(
     except AuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AuthResponse(ok=True, user=_auth_user_response(user), message="密码已更新。")
+
+
+@app.get("/api/v1/desktop/settings", response_model=DesktopSettingsResponse)
+async def get_desktop_settings(_internal: InternalAuth) -> DesktopSettingsResponse:
+    if not is_desktop_mode():
+        raise HTTPException(status_code=404, detail="桌面设置仅在本地桌面模式可用。")
+    config = load_desktop_config()
+    return DesktopSettingsResponse(
+        ok=True,
+        api_key_configured=bool(config.get("apiKey")),
+        base_url=config.get("baseUrl") or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com"),
+        model=config.get("model") or os.getenv("OPENAI_MODEL", get_settings().llm.model),
+        updated_at=float(config["updatedAt"]) if config.get("updatedAt") else None,
+    )
+
+
+@app.put("/api/v1/desktop/settings", response_model=DesktopSettingsResponse)
+async def update_desktop_settings(
+    request: DesktopSettingsRequest,
+    _internal: InternalAuth,
+) -> DesktopSettingsResponse:
+    if not is_desktop_mode():
+        raise HTTPException(status_code=404, detail="桌面设置仅在本地桌面模式可用。")
+
+    now = time.time()
+    path = desktop_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_desktop_config()
+    payload = {
+        "apiKey": request.api_key.strip() or existing.get("apiKey", ""),
+        "baseUrl": request.base_url.strip().rstrip("/") or "https://api.deepseek.com",
+        "model": request.model.strip() or get_settings().llm.model,
+        "updatedAt": now,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    apply_desktop_config()
+    services: dict[str, RAGService] = app.state.rag_services
+    services.clear()
+    return DesktopSettingsResponse(
+        ok=True,
+        api_key_configured=bool(payload["apiKey"]),
+        base_url=payload["baseUrl"],
+        model=payload["model"],
+        updated_at=now,
+    )
 
 
 @app.post("/chat", response_model=Union[ChatResponse, ErrorResponse])

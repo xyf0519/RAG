@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireAdmin, requireUser } from "@/server/auth/session";
+import { requireKnowledgeOperator, requireUser } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
 
 export const runtime = "nodejs";
@@ -30,7 +30,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ knowledgeBaseId: string }> },
 ) {
-  const auth = await requireAdmin(request);
+  const auth = await requireKnowledgeOperator(request);
   if (!auth.ok) {
     return auth.response;
   }

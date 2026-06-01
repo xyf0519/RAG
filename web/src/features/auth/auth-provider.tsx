@@ -4,6 +4,8 @@ import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, 
 
 import type { AuthSession, AuthUser } from "@/shared/types/auth";
 
+const IS_DESKTOP_MODE = process.env.NEXT_PUBLIC_APP_MODE === "desktop";
+
 type AuthContextValue = {
   session: AuthSession | null;
   user: AuthUser | null;
@@ -42,12 +44,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    if (IS_DESKTOP_MODE) {
+      await refreshSession();
+      return;
+    }
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
       setSession(null);
     }
-  }, []);
+  }, [refreshSession]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

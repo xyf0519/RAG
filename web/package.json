@@ -2,10 +2,20 @@
   "name": "xyfrag-web",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3000",
+    "dev:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
+    "build:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
+    "start:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next start --hostname 127.0.0.1",
+    "electron": "electron .",
+    "desktop:dev": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop electron .",
+    "desktop:pack": "npm run build:desktop && electron-builder --dir",
+    "desktop:dist": "npm run build:desktop && electron-builder",
+    "desktop:dist:mac": "npm run build:desktop && electron-builder --mac dmg",
+    "desktop:dist:win": "npm run build:desktop && electron-builder --win nsis",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -30,6 +40,8 @@
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
+    "electron": "39.2.7",
+    "electron-builder": "26.0.12",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "globals": "16.5.0",
@@ -40,5 +52,47 @@
   },
   "engines": {
     "node": ">=24 <25"
+  },
+  "build": {
+    "appId": "cn.xyfrag.desktop",
+    "productName": "xyfRAG",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      ".next/**/*",
+      "public/**/*",
+      "electron/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../",
+        "to": "rag",
+        "filter": [
+          "app/**",
+          "config/**",
+          "data/raw/**",
+          "requirements.txt",
+          "requirements-local-models.txt",
+          "src/**",
+          "models/train_classifier.py",
+          "scripts/build_index.py"
+        ]
+      }
+    ],
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

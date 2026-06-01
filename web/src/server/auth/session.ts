@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 
 import { proxyBackendJson } from "@/server/rag/client";
+import { DESKTOP_USER, isDesktopMode } from "@/shared/config/runtime";
 import type { AuthUser } from "@/shared/types/auth";
 
 const SESSION_COOKIE = "xyfrag.session";
@@ -86,6 +87,10 @@ export function clearSessionCookie(response: NextResponse) {
 }
 
 export async function getCurrentUser(request?: NextRequest): Promise<AuthUser | null> {
+  if (isDesktopMode()) {
+    return DESKTOP_USER;
+  }
+
   let cookieValue: string | undefined;
   if (request) {
     cookieValue = request.cookies?.get(SESSION_COOKIE)?.value ?? getCookieFromHeader(request.headers.get("cookie"));
@@ -139,4 +144,11 @@ export async function requireAdmin(request?: NextRequest): Promise<AuthResult> {
     };
   }
   return result;
+}
+
+export async function requireKnowledgeOperator(request?: NextRequest): Promise<AuthResult> {
+  if (isDesktopMode()) {
+    return { ok: true, user: DESKTOP_USER };
+  }
+  return requireAdmin(request);
 }

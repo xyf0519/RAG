@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireUser } from "@/server/auth/session";
+import { getBackendUrl } from "@/server/rag/client";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,12 @@ export async function POST(request: NextRequest) {
   }
 
   const startedAt = Date.now();
-  const endpoint = body.target === "rag" ? new URL("/health", parsed.url) : new URL("/models", parsed.url);
+  const endpoint =
+    body.target === "rag" && body.url === "desktop-backend"
+      ? new URL("/health", getBackendUrl())
+      : body.target === "rag"
+        ? new URL("/health", parsed.url)
+        : new URL("/models", parsed.url);
   try {
     const response = await fetch(endpoint, {
       headers: body.target === "model" && body.apiKey
@@ -75,6 +81,9 @@ export async function POST(request: NextRequest) {
 }
 
 function parseHttpUrl(value?: string): { ok: true; url: URL } | { ok: false; message: string } {
+  if (value === "desktop-backend") {
+    return { ok: true, url: new URL(getBackendUrl()) };
+  }
   if (!value?.trim()) {
     return { ok: false, message: "请输入 URL。" };
   }

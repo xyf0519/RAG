@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Any
 
@@ -148,6 +149,44 @@ def _resolve_settings_paths(settings: Settings) -> Settings:
     return settings
 
 
+def _apply_env_path_overrides(settings: Settings) -> Settings:
+    """Apply desktop/deployment filesystem overrides before path resolution."""
+
+    data_dir = os.getenv("XYFRAG_DATA_DIR")
+    if data_dir:
+        data_root = Path(data_dir)
+        settings.paths.raw_docs_dir = data_root / "raw"
+        settings.paths.index_dir = data_root / "index"
+        settings.paths.knowledge_bases_dir = data_root / "knowledge_bases"
+        settings.paths.ops_db = data_root / "ops.sqlite3"
+
+    models_dir = os.getenv("XYFRAG_MODELS_DIR")
+    if models_dir:
+        models_root = Path(models_dir)
+        settings.paths.classifier_dir = models_root / "boundary_classifier"
+        settings.paths.knowledge_models_dir = models_root / "knowledge_bases"
+
+    logs_dir = os.getenv("XYFRAG_LOGS_DIR")
+    if logs_dir:
+        settings.paths.log_file = Path(logs_dir) / "xyfrag.log"
+
+    explicit_paths = {
+        "XYFRAG_RAW_DOCS_DIR": "raw_docs_dir",
+        "XYFRAG_INDEX_DIR": "index_dir",
+        "XYFRAG_CLASSIFIER_DIR": "classifier_dir",
+        "XYFRAG_KNOWLEDGE_BASES_DIR": "knowledge_bases_dir",
+        "XYFRAG_KNOWLEDGE_MODELS_DIR": "knowledge_models_dir",
+        "XYFRAG_OPS_DB": "ops_db",
+        "XYFRAG_LOG_FILE": "log_file",
+    }
+    for env_name, field_name in explicit_paths.items():
+        value = os.getenv(env_name)
+        if value:
+            setattr(settings.paths, field_name, Path(value))
+
+    return settings
+
+
 @lru_cache(maxsize=1)
 def get_settings(config_path: str = "config/settings.yaml") -> Settings:
     """Load settings from YAML and environment variables.
@@ -170,7 +209,7 @@ def get_settings(config_path: str = "config/settings.yaml") -> Settings:
     load_dotenv(PROJECT_ROOT.parent / ".env")
     load_dotenv(PROJECT_ROOT / ".env", override=True)
     data = _read_yaml(config_file)
-    settings = _resolve_settings_paths(Settings.model_validate(data))
+    settings = _resolve_settings_paths(_apply_env_path_overrides(Settings.model_validate(data)))
 
     for path in (
         settings.paths.raw_docs_dir,

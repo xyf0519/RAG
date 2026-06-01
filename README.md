@@ -168,6 +168,8 @@ docker compose -f docker-compose.intranet.yml up --build -d
 
 `docker-compose.intranet.yml` 只暴露 Nginx 的 `80/443`，FastAPI 只在 Docker 内网中被 Next.js BFF 调用。生产环境需要配置 `AUTH_SECRET`、`INTERNAL_API_KEY`、`SMTP_*`、`ADMIN_EMAILS`，并持久化备份 `data/`、`models/`、`logs/`。
 
+桌面端分支可参考 [桌面端开发与打包](docs/DESKTOP_APP.md)，使用 Electron 启动本地 FastAPI/RAG 并隐藏多用户管理员功能。
+
 ## 目录地图
 
 ```text

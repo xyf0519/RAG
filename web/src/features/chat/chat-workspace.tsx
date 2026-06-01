@@ -66,15 +66,18 @@ import type {
 
 type WorkspaceView = "chat" | "knowledge" | "boundary" | "users";
 
+const IS_DESKTOP_MODE = process.env.NEXT_PUBLIC_APP_MODE === "desktop";
+
 const NAV_ITEMS: Array<{
   id: WorkspaceView;
   label: string;
   icon: typeof MessageSquareText;
   badge?: string;
   adminOnly?: boolean;
+  desktop?: boolean;
 }> = [
   { id: "chat", label: "问答工作台", icon: MessageSquareText },
-  { id: "knowledge", label: "添加知识库", icon: FilePlus2, adminOnly: true },
+  { id: "knowledge", label: "添加知识库", icon: FilePlus2, adminOnly: true, desktop: true },
   { id: "boundary", label: "边界训练", icon: BrainCircuit, adminOnly: true },
   { id: "users", label: "用户运维", icon: Users, badge: "权限", adminOnly: true },
 ];
@@ -139,6 +142,7 @@ export function ChatWorkspace() {
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE.id);
   const [knowledgeNotice, setKnowledgeNotice] = useState("知识库运维状态正常。");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const canManageKnowledge = auth.isAdmin || IS_DESKTOP_MODE;
 
   useEffect(() => {
     let mounted = true;
@@ -296,6 +300,8 @@ export function ChatWorkspace() {
           onOpenSession={openStoredSession}
           user={auth.user}
           isAdmin={auth.isAdmin}
+          desktopMode={IS_DESKTOP_MODE}
+          canManageKnowledge={canManageKnowledge}
           activeView={workspaceView}
           collapsed={sidebarCollapsed}
           onChangeView={changeWorkspaceView}
@@ -311,10 +317,12 @@ export function ChatWorkspace() {
             user={auth.user}
             onSignOut={auth.signOut}
             onOpenSidebar={() => setSidebarOpen(true)}
+            desktopMode={IS_DESKTOP_MODE}
           />
 
-          {workspaceView === "knowledge" && auth.isAdmin ? (
+          {workspaceView === "knowledge" && canManageKnowledge ? (
             <KnowledgeAddWorkspace
+              desktopMode={IS_DESKTOP_MODE}
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedKnowledgeBase.id}
               notice={knowledgeNotice}
@@ -323,15 +331,15 @@ export function ChatWorkspace() {
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
-          {workspaceView === "boundary" && auth.isAdmin ? (
+          {workspaceView === "boundary" && auth.isAdmin && !IS_DESKTOP_MODE ? (
             <BoundaryTrainingWorkspace
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedKnowledgeBase.id}
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
-          {workspaceView === "users" && auth.isAdmin ? <UserOperationsWorkspace currentUser={auth.user} /> : null}
-          {workspaceView === "chat" || !auth.isAdmin ? (
+          {workspaceView === "users" && auth.isAdmin && !IS_DESKTOP_MODE ? <UserOperationsWorkspace currentUser={auth.user} /> : null}
+          {workspaceView === "chat" || (!auth.isAdmin && !IS_DESKTOP_MODE) ? (
             <ChatWorkspaceView
               chat={chat}
               input={input}
@@ -526,6 +534,7 @@ function ChatWorkspaceView({
 }
 
 function KnowledgeAddWorkspace({
+  desktopMode = false,
   knowledgeBases,
   selectedKnowledgeBaseId,
   notice,
@@ -533,6 +542,7 @@ function KnowledgeAddWorkspace({
   onRefresh,
   onSelect,
 }: {
+  desktopMode?: boolean;
   knowledgeBases: KnowledgeBase[];
   selectedKnowledgeBaseId: string;
   notice: string;
@@ -708,8 +718,8 @@ function KnowledgeAddWorkspace({
           <VisualHero
             image={KNOWLEDGE_VISUAL_SRC}
             eyebrow="Knowledge"
-            title="添加知识库"
-            description="创建资料空间，上传文档并构建索引。"
+            title={desktopMode ? "个人资料库" : "添加知识库"}
+            description={desktopMode ? "管理本机资料，构建个人索引。" : "创建资料空间，上传文档并构建索引。"}
           />
           <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
             <CardHeader className="shrink-0">
@@ -1795,6 +1805,8 @@ function ProductSidebar({
   onOpenSession,
   user,
   isAdmin,
+  desktopMode,
+  canManageKnowledge,
   activeView,
   collapsed,
   onChangeView,
@@ -1811,6 +1823,8 @@ function ProductSidebar({
   onOpenSession: (sessionId: string) => void;
   user: AuthUser;
   isAdmin: boolean;
+  desktopMode: boolean;
+  canManageKnowledge: boolean;
   activeView: WorkspaceView;
   collapsed: boolean;
   onChangeView: (view: WorkspaceView) => void;
@@ -1818,7 +1832,16 @@ function ProductSidebar({
   onSignOut: () => void;
   onOpenSettings: () => void;
 }) {
-  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (desktopMode) {
+      return item.id === "chat" || Boolean(item.desktop && canManageKnowledge);
+    }
+    return !item.adminOnly || isAdmin;
+  }).map((item) =>
+    desktopMode && item.id === "knowledge"
+      ? { ...item, label: "个人资料库" }
+      : item,
+  );
   const [hoveringLogo, setHoveringLogo] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1900,7 +1923,9 @@ function ProductSidebar({
               </div>
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold">xyfRAG</h2>
-                <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
+                <p className="truncate text-xs text-[var(--muted)]">
+                  {desktopMode ? "本机个人知识问答" : "产业级知识问答中枢"}
+                </p>
               </div>
             </div>
           )}
@@ -2046,6 +2071,7 @@ function ProductSidebar({
             <AccountMenu
               collapsed={collapsed}
               user={user}
+              desktopMode={desktopMode}
               onOpenSettings={openSettingsFromMenu}
               onSignOut={signOutFromMenu}
             />
@@ -2078,7 +2104,7 @@ function ProductSidebar({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{user.name}</p>
                   <p className="truncate text-xs text-[var(--muted)]">
-                    {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
+                    {desktopMode ? "本机用户" : user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
                   </p>
                 </div>
                 <ChevronRight size={16} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
@@ -2094,11 +2120,13 @@ function ProductSidebar({
 function AccountMenu({
   collapsed,
   user,
+  desktopMode,
   onOpenSettings,
   onSignOut,
 }: {
   collapsed: boolean;
   user: AuthUser;
+  desktopMode: boolean;
   onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
@@ -2116,7 +2144,7 @@ function AccountMenu({
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{user.name}</p>
           <p className="truncate text-xs text-[var(--muted)]">
-            {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
+            {desktopMode ? "本机用户" : user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
           </p>
         </div>
       </div>
@@ -2129,14 +2157,16 @@ function AccountMenu({
         <Settings size={18} aria-hidden="true" />
         设置
       </button>
-      <button
-        type="button"
-        onClick={onSignOut}
-        className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-[var(--danger)] transition hover:bg-[var(--danger-soft)]"
-      >
-        <LogOut size={18} aria-hidden="true" />
-        退出登录
-      </button>
+      {!desktopMode ? (
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-[var(--danger)] transition hover:bg-[var(--danger-soft)]"
+        >
+          <LogOut size={18} aria-hidden="true" />
+          退出登录
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -2144,6 +2174,7 @@ function AccountMenu({
 type RuntimeConfig = {
   ragUrl: string;
   modelApiUrl: string;
+  model: string;
   apiKey: string;
 };
 
@@ -2158,7 +2189,8 @@ type ConnectivityResult = {
 
 const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   ragUrl: "http://127.0.0.1:8000",
-  modelApiUrl: "https://api.openai.com/v1",
+  modelApiUrl: "https://api.deepseek.com",
+  model: "deepseek-v4-flash",
   apiKey: "",
 };
 
@@ -2175,16 +2207,53 @@ function AccountSettingsModal({
   const [testing, setTesting] = useState<ConnectivityTarget | null>(null);
   const [results, setResults] = useState<Partial<Record<ConnectivityTarget, ConnectivityResult>>>({});
   const [activePanel, setActivePanel] = useState<"settings" | "connection">("settings");
+  const [settingsError, setSettingsError] = useState("");
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (raw) {
-        setConfig({ ...DEFAULT_RUNTIME_CONFIG, ...(JSON.parse(raw) as Partial<RuntimeConfig>) });
+    let mounted = true;
+    async function loadDesktopConfig() {
+      if (!IS_DESKTOP_MODE) {
+        try {
+          const raw = window.localStorage.getItem(storageKey);
+          if (raw) {
+            setConfig({ ...DEFAULT_RUNTIME_CONFIG, ...(JSON.parse(raw) as Partial<RuntimeConfig>) });
+          }
+        } catch {
+          setConfig(DEFAULT_RUNTIME_CONFIG);
+        }
+        return;
       }
-    } catch {
-      setConfig(DEFAULT_RUNTIME_CONFIG);
+
+      try {
+        const response = await fetch("/api/desktop/settings", { cache: "no-store" });
+        const data = (await response.json()) as {
+          base_url?: string;
+          model?: string;
+          api_key_configured?: boolean;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(data.error || "桌面设置读取失败。");
+        }
+        if (mounted) {
+          setConfig({
+            ragUrl: "desktop-backend",
+            modelApiUrl: data.base_url || DEFAULT_RUNTIME_CONFIG.modelApiUrl,
+            model: data.model || DEFAULT_RUNTIME_CONFIG.model,
+            apiKey: "",
+          });
+          setSaved(Boolean(data.api_key_configured));
+        }
+      } catch (error) {
+        if (mounted) {
+          setSettingsError(error instanceof Error ? error.message : "桌面设置读取失败。");
+        }
+      }
     }
+    void loadDesktopConfig();
+    return () => {
+      mounted = false;
+    };
   }, [storageKey]);
 
   function updateConfig(key: keyof RuntimeConfig, value: string) {
@@ -2192,10 +2261,34 @@ function AccountSettingsModal({
     setConfig((current) => ({ ...current, [key]: value }));
   }
 
-  function saveConfig() {
-    window.localStorage.setItem(storageKey, JSON.stringify(config));
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1400);
+  async function saveConfig() {
+    setSettingsError("");
+    if (!IS_DESKTOP_MODE) {
+      window.localStorage.setItem(storageKey, JSON.stringify(config));
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1400);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/desktop/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: config.apiKey,
+          base_url: config.modelApiUrl,
+          model: config.model,
+        }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "桌面设置保存失败。");
+      }
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1400);
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "桌面设置保存失败。");
+    }
   }
 
   async function testConnection(target: ConnectivityTarget) {
@@ -2305,6 +2398,7 @@ function AccountSettingsModal({
                       value={config.ragUrl}
                       onChange={(value) => updateConfig("ragUrl", value)}
                       placeholder="http://127.0.0.1:8000"
+                      disabled={IS_DESKTOP_MODE}
                     />
                     <SettingsField
                       label="模型 API URL"
@@ -2313,13 +2407,24 @@ function AccountSettingsModal({
                       placeholder="https://api.openai.com/v1"
                     />
                     <SettingsField
+                      label="模型"
+                      value={config.model}
+                      onChange={(value) => updateConfig("model", value)}
+                      placeholder="deepseek-v4-flash"
+                    />
+                    <SettingsField
                       label="API Key"
                       value={config.apiKey}
                       onChange={(value) => updateConfig("apiKey", value)}
-                      placeholder="sk-..."
+                      placeholder={IS_DESKTOP_MODE && saved ? "已保存，留空则保留" : "sk-..."}
                       type="password"
                     />
-                    <Button type="button" variant="primary" className="w-full justify-center" onClick={saveConfig}>
+                    {settingsError ? (
+                      <p className="rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm font-medium text-[var(--danger)]">
+                        {settingsError}
+                      </p>
+                    ) : null}
+                    <Button type="button" variant="primary" className="w-full justify-center" onClick={() => void saveConfig()}>
                       <CheckCircle2 size={15} aria-hidden="true" />
                       {saved ? "已保存" : "保存配置"}
                     </Button>
@@ -2362,12 +2467,14 @@ function SettingsField({
   onChange,
   placeholder,
   type = "text",
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
   type?: "text" | "password";
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
@@ -2377,7 +2484,8 @@ function SettingsField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-11 w-full rounded-xl border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:shadow-[0_0_0_4px_rgba(0,108,99,0.08)]"
+        disabled={disabled}
+        className="h-11 w-full rounded-xl border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:shadow-[0_0_0_4px_rgba(0,108,99,0.08)] disabled:bg-[var(--panel-muted)] disabled:text-[var(--muted)]"
       />
     </label>
   );
@@ -2438,12 +2546,14 @@ function ProductHeader({
   user,
   onSignOut,
   onOpenSidebar,
+  desktopMode,
 }: {
   health: BackendHealth | null;
   healthOk: boolean;
   user: AuthUser;
   onSignOut: () => void;
   onOpenSidebar: () => void;
+  desktopMode: boolean;
 }) {
   return (
     <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
@@ -2479,10 +2589,17 @@ function ProductHeader({
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
           <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
-          <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
-            <LogOut size={15} aria-hidden="true" />
-            <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
-          </Button>
+          {desktopMode ? (
+            <div className="flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm">
+              <ShieldCheck size={14} className="text-[var(--accent)]" aria-hidden="true" />
+              <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
+            </div>
+          ) : (
+            <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
+              <LogOut size={15} aria-hidden="true" />
+              <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
+            </Button>
+          )}
         </div>
       </div>
     </header>
