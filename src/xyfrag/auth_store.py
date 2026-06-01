@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import smtplib
@@ -190,7 +191,11 @@ class AuthStore:
         with self._lock, self._connect() as connection:
             connection.execute(
                 "UPDATE users SET role = ?, last_login_at = ? WHERE id = ?",
-                (self.role_for_email(normalized_email), now, user_row["id"]),
+                (
+                    self.role_for_email(normalized_email, current_role=str(user_row["role"])),
+                    now,
+                    user_row["id"],
+                ),
             )
         self.audit(str(user_row["id"]), normalized_email, "login")
         return self.require_user(str(user_row["id"]))
@@ -205,10 +210,49 @@ class AuthStore:
         with self._lock, self._connect() as connection:
             connection.execute(
                 "UPDATE users SET password_hash = ?, role = ? WHERE id = ?",
-                (self._hash_password(new_password), self.role_for_email(normalized_email), user.id),
+                (
+                    self._hash_password(new_password),
+                    self.role_for_email(normalized_email, current_role=user.role),
+                    user.id,
+                ),
             )
         self.audit(user.id, normalized_email, "password_reset")
         return self.require_user(user.id)
+
+    def list_users(self) -> list[AuthUserRecord]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM users
+                ORDER BY
+                    CASE role WHEN 'admin' THEN 0 ELSE 1 END,
+                    COALESCE(last_login_at, created_at) DESC
+                """
+            ).fetchall()
+        return [self._user_from_row(row) for row in rows]
+
+    def update_user_role(self, user_id: str, role: UserRole, operator: AuthUserRecord) -> AuthUserRecord:
+        if role not in {"user", "admin"}:
+            raise AuthError("用户角色不正确。")
+        target = self.require_user(user_id)
+        if self.is_core_admin(target.email) and role != "admin":
+            raise AuthError("核心管理员不能降级。")
+        with self._lock, self._connect() as connection:
+            connection.execute("UPDATE users SET role = ? WHERE id = ?", (role, target.id))
+        self.audit(
+            operator.id,
+            operator.email,
+            "user_role_updated",
+            json.dumps(
+                {
+                    "target_user_id": target.id,
+                    "target_email": target.email,
+                    "role": role,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return self.require_user(target.id)
 
     def consume_code(self, email: str, purpose: str, code: str) -> None:
         now = time.time()
@@ -242,8 +286,8 @@ class AuthStore:
             raise AuthError("登录状态已失效，请重新登录。")
         if row["disabled_at"] is not None:
             raise AuthError("账号已停用，请联系管理员。")
-        role = self.role_for_email(str(row["email"]))
-        if role != row["role"]:
+        role = self.role_for_email(str(row["email"]), current_role=str(row["role"]))
+        if role != str(row["role"]):
             with self._lock, self._connect() as connection:
                 connection.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
             row = self._get_user_row_by_email(str(row["email"]))
@@ -260,8 +304,11 @@ class AuthStore:
                 (f"audit-{secrets.token_hex(12)}", user_id, email, action, metadata, now),
             )
 
-    def role_for_email(self, email: str) -> UserRole:
-        return "admin" if self.normalize_email(email) in self._admin_emails else "user"
+    def role_for_email(self, email: str, current_role: UserRole | None = None) -> UserRole:
+        return "admin" if self.is_core_admin(email) else current_role or "user"
+
+    def is_core_admin(self, email: str) -> bool:
+        return self.normalize_email(email) in self._admin_emails
 
     def require_allowed_email(self, email: str) -> None:
         if not email.endswith(f"@{self._allowed_domain}"):

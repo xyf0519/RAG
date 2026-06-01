@@ -5,6 +5,11 @@ export type AuthUser = {
   name: string;
   email: string;
   role: UserRole;
+  emailVerifiedAt?: number | null;
+  createdAt?: number | null;
+  lastLoginAt?: number | null;
+  disabledAt?: number | null;
+  coreAdmin?: boolean;
 };
 
 export type AuthSession = {

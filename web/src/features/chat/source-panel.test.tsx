@@ -28,6 +28,48 @@ describe("ChatWorkspace", () => {
         if (url.includes("/api/health")) {
           return jsonResponse({ ok: true, backend: { ok: true, app: "xyfRAG" } });
         }
+        if (url.endsWith("/api/admin/users")) {
+          return jsonResponse({
+            ok: true,
+            users: [
+              {
+                id: "admin",
+                name: "知识库管理员",
+                email: "admin@zju.edu.cn",
+                role: "admin",
+                emailVerifiedAt: Date.now() / 1000,
+                createdAt: Date.now() / 1000,
+                lastLoginAt: Date.now() / 1000,
+                coreAdmin: true,
+              },
+              {
+                id: "student",
+                name: "求是用户",
+                email: "user@zju.edu.cn",
+                role: "user",
+                emailVerifiedAt: Date.now() / 1000,
+                createdAt: Date.now() / 1000,
+                lastLoginAt: null,
+                coreAdmin: false,
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/admin/users/student/role")) {
+          return jsonResponse({
+            ok: true,
+            user: {
+              id: "student",
+              name: "求是用户",
+              email: "user@zju.edu.cn",
+              role: "admin",
+              emailVerifiedAt: Date.now() / 1000,
+              createdAt: Date.now() / 1000,
+              lastLoginAt: null,
+              coreAdmin: false,
+            },
+          });
+        }
         if (url.endsWith("/api/knowledge-bases")) {
           return jsonResponse([
             {
@@ -197,7 +239,7 @@ describe("ChatWorkspace", () => {
     expect(screen.getByRole("button", { name: "删除样本" })).toBeInTheDocument();
   });
 
-  it("opens the admin quality analytics workspace", async () => {
+  it("opens the admin user operations workspace and updates roles", async () => {
     seedSession("admin");
 
     render(
@@ -206,11 +248,14 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /质量分析/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /用户运维/ }));
 
-    expect(screen.getByRole("heading", { name: "质量分析中心" })).toBeInTheDocument();
-    expect(screen.getByText("可信回答趋势")).toBeInTheDocument();
-    expect(screen.getByText("待复核回答")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "用户运维" })).toBeInTheDocument();
+    expect(screen.getByText("user@zju.edu.cn")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "管理员" }).find((button) => !button.hasAttribute("disabled"))!);
+
+    expect(await screen.findByText("user@zju.edu.cn 已更新为管理员。")).toBeInTheDocument();
   });
 
   it("collapses the desktop sidebar into icon actions", async () => {
@@ -240,7 +285,7 @@ describe("ChatWorkspace", () => {
     await screen.findByPlaceholderText("输入校园资料库相关问题...");
     expect(screen.queryByRole("button", { name: /添加知识库/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /边界训练/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /质量分析/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /用户运维/ })).not.toBeInTheDocument();
   });
 
   it("restores saved sessions from the history list", async () => {

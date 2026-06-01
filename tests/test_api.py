@@ -177,6 +177,56 @@ def test_admin_email_gets_admin_role() -> None:
     assert response.json()["user"]["role"] == "admin"
 
 
+def test_admin_can_list_users_and_assign_roles() -> None:
+    with TestClient(app) as client:
+        assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
+        admin_response = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "admin@zju.edu.cn",
+                "password": "password123",
+                "code": "123456",
+                "name": "管理员",
+            },
+        )
+        assert admin_response.status_code == 200
+        admin = admin_response.json()["user"]
+
+        assert client.post("/api/v1/auth/register/start", json={"email": "student@zju.edu.cn"}).status_code == 200
+        user_response = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "student@zju.edu.cn",
+                "password": "password123",
+                "code": "123456",
+                "name": "学生用户",
+            },
+        )
+        assert user_response.status_code == 200
+        user = user_response.json()["user"]
+
+        list_response = client.get("/api/v1/auth/users")
+        assert list_response.status_code == 200
+        listed = list_response.json()["users"]
+        assert {item["email"] for item in listed} >= {"admin@zju.edu.cn", "student@zju.edu.cn"}
+        assert next(item for item in listed if item["email"] == "admin@zju.edu.cn")["core_admin"] is True
+
+        update_response = client.patch(
+            f"/api/v1/auth/users/{user['id']}/role",
+            params={"operator_user_id": admin["id"]},
+            json={"role": "admin"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["user"]["role"] == "admin"
+
+        core_downgrade = client.patch(
+            f"/api/v1/auth/users/{admin['id']}/role",
+            params={"operator_user_id": admin["id"]},
+            json={"role": "user"},
+        )
+        assert core_downgrade.status_code == 400
+
+
 def test_boundary_item_endpoints() -> None:
     with TestClient(app) as client:
         create_response = client.post(

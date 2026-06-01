@@ -3,17 +3,14 @@
 import {
   Activity,
   Archive,
-  BarChart3,
   BookOpenText,
   Bot,
   BrainCircuit,
   CheckCircle2,
   ChevronRight,
-  Clock3,
   Copy,
   Database,
   FilePlus2,
-  FileCheck2,
   FileText,
   HelpCircle,
   HeartPulse,
@@ -24,7 +21,6 @@ import {
   Menu,
   MessageSquareText,
   PanelLeftClose,
-  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   PenLine,
@@ -32,6 +28,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Settings,
   ShieldCheck,
   Sparkles,
   Square,
@@ -39,8 +36,9 @@ import {
   ThumbsDown,
   ThumbsUp,
   UploadCloud,
+  UserCog,
+  Users,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,7 +49,7 @@ import { LoginScreen } from "@/features/auth/login-screen";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useRagChatStream } from "@/features/chat/use-rag-chat-stream";
 import { cn, formatSeconds } from "@/shared/lib/utils";
-import type { AuthUser } from "@/shared/types/auth";
+import type { AuthUser, UserRole } from "@/shared/types/auth";
 import type {
   BackendHealth,
   ChatMessage,
@@ -66,7 +64,7 @@ import type {
   Source,
 } from "@/shared/types/chat";
 
-type WorkspaceView = "chat" | "knowledge" | "boundary" | "quality";
+type WorkspaceView = "chat" | "knowledge" | "boundary" | "users";
 
 const NAV_ITEMS: Array<{
   id: WorkspaceView;
@@ -78,7 +76,7 @@ const NAV_ITEMS: Array<{
   { id: "chat", label: "问答工作台", icon: MessageSquareText },
   { id: "knowledge", label: "添加知识库", icon: FilePlus2, adminOnly: true },
   { id: "boundary", label: "边界训练", icon: BrainCircuit, adminOnly: true },
-  { id: "quality", label: "质量分析", icon: BarChart3, badge: "治理", adminOnly: true },
+  { id: "users", label: "用户运维", icon: Users, badge: "权限", adminOnly: true },
 ];
 
 const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
@@ -97,39 +95,6 @@ const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
 
-const QUALITY_REVIEWS = [
-  {
-    title: "校园卡挂失流程",
-    issue: "引用片段重复出现",
-    owner: "图书馆",
-    priority: "高",
-    status: "待复核",
-  },
-  {
-    title: "宿舍管理规定摘要",
-    issue: "资料版本较旧",
-    owner: "公寓服务",
-    priority: "中",
-    status: "待更新",
-  },
-  {
-    title: "请假审批条件",
-    issue: "回答命中边界较窄",
-    owner: "学生事务",
-    priority: "中",
-    status: "观察中",
-  },
-];
-
-const QUALITY_TRENDS = [
-  { label: "周一", value: 64 },
-  { label: "周二", value: 78 },
-  { label: "周三", value: 72 },
-  { label: "周四", value: 88 },
-  { label: "周五", value: 82 },
-  { label: "周六", value: 92 },
-];
-
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
   { id: "sources", label: "引用", icon: FileText },
@@ -144,13 +109,6 @@ type FeedbackStats = {
   favorites: number;
   total: number;
 };
-type QualityMetric = {
-  label: string;
-  value: string;
-  detail: string;
-  icon: LucideIcon;
-};
-
 const PROCESS_STAGES: Array<{
   id: TraceStage;
   label: string;
@@ -180,6 +138,7 @@ export function ChatWorkspace() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([DEFAULT_KNOWLEDGE_BASE]);
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE.id);
   const [knowledgeNotice, setKnowledgeNotice] = useState("知识库运维状态正常。");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -270,12 +229,18 @@ export function ChatWorkspace() {
   function changeWorkspaceView(view: WorkspaceView) {
     setWorkspaceView(view);
     setSidebarOpen(false);
+    if (view === "chat") {
+      setSidebarCollapsed(false);
+    } else {
+      window.setTimeout(() => setSidebarCollapsed(true), sidebarCollapsed ? 0 : 140);
+    }
   }
 
   function startNewSession() {
     chat.newSession();
     setWorkspaceView("chat");
     setSidebarOpen(false);
+    setSidebarCollapsed(false);
   }
 
   function openStoredSession(nextSessionId: string) {
@@ -286,6 +251,7 @@ export function ChatWorkspace() {
     }
     setWorkspaceView("chat");
     setSidebarOpen(false);
+    setSidebarCollapsed(false);
   }
 
   async function copyAnswer(message: ChatMessage) {
@@ -335,6 +301,7 @@ export function ChatWorkspace() {
           onChangeView={changeWorkspaceView}
           onToggleCollapse={() => setSidebarCollapsed((value) => !value)}
           onSignOut={auth.signOut}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col transition-all duration-300 ease-out">
@@ -344,8 +311,6 @@ export function ChatWorkspace() {
             user={auth.user}
             onSignOut={auth.signOut}
             onOpenSidebar={() => setSidebarOpen(true)}
-            sidebarCollapsed={sidebarCollapsed}
-            onExpandSidebar={() => setSidebarCollapsed(false)}
           />
 
           {workspaceView === "knowledge" && auth.isAdmin ? (
@@ -365,7 +330,7 @@ export function ChatWorkspace() {
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
-          {workspaceView === "quality" && auth.isAdmin ? <QualityAnalyticsWorkspace feedbackStats={feedbackStats} /> : null}
+          {workspaceView === "users" && auth.isAdmin ? <UserOperationsWorkspace currentUser={auth.user} /> : null}
           {workspaceView === "chat" || !auth.isAdmin ? (
             <ChatWorkspaceView
               chat={chat}
@@ -390,6 +355,12 @@ export function ChatWorkspace() {
           ) : null}
         </div>
       </div>
+      {settingsOpen ? (
+        <AccountSettingsModal
+          user={auth.user}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -732,7 +703,7 @@ function KnowledgeAddWorkspace({
 
   return (
     <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_320px]">
+      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_300px]">
         <div className="grid min-h-0 grid-rows-[176px_minmax(0,1fr)] gap-4">
           <VisualHero
             image={KNOWLEDGE_VISUAL_SRC}
@@ -881,7 +852,7 @@ function KnowledgeAddWorkspace({
           </Card>
         </div>
 
-        <aside className="grid min-h-0 content-start gap-4">
+        <aside className="grid min-h-0 content-start gap-4 overflow-hidden">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardHeader>
               <h2 className="text-sm font-semibold">状态</h2>
@@ -907,16 +878,12 @@ function KnowledgeAddWorkspace({
           </Card>
 
           <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
-            <CardHeader>
+            <CardHeader className="px-4 py-3">
               <h2 className="text-sm font-semibold">边界模型</h2>
-              <p className="text-xs text-[var(--muted)]">当前知识库的可用版本</p>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-3 px-4 pb-4 pt-3">
               {classifierModels.length ? (
                 <>
-                  <label className="block text-xs font-medium text-[var(--muted)]" htmlFor="knowledge-model-select">
-                    当前模型
-                  </label>
                   <select
                     id="knowledge-model-select"
                     value={selectedClassifierModel?.id ?? ""}
@@ -930,9 +897,9 @@ function KnowledgeAddWorkspace({
                     ))}
                   </select>
                   {selectedClassifierModel ? (
-                    <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-4 shadow-sm">
+                    <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-2.5 shadow-sm">
                       <div className="relative flex items-center gap-3">
-                        <div className="boundary-model-orb flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
+                        <div className="boundary-model-orb flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
                           <BrainCircuit size={17} aria-hidden="true" />
                         </div>
                         <div className="min-w-0">
@@ -942,11 +909,11 @@ function KnowledgeAddWorkspace({
                           </p>
                         </div>
                       </div>
-                      <div className="relative mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <div className="relative mt-2 grid grid-cols-2 gap-2 text-xs">
                         <StateRow label="准确率" value={formatMetricPercent(selectedClassifierMetrics.accuracy)} />
                         <StateRow label="样本" value={`${selectedClassifierMetrics.sample_count ?? "-"}`} />
                       </div>
-                      <div className="relative mt-3 flex flex-wrap gap-1.5">
+                      <div className="relative mt-2 flex flex-wrap gap-1.5">
                         <span className="rounded-full border border-[var(--accent-soft)] bg-white/80 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-strong)]">
                           @{selectedClassifierModel.alias}
                         </span>
@@ -1557,148 +1524,264 @@ function BoundaryTrainingWorkspace({
   );
 }
 
-function QualityAnalyticsWorkspace({ feedbackStats }: { feedbackStats: FeedbackStats }) {
-  const [selectedReview, setSelectedReview] = useState(QUALITY_REVIEWS[0].title);
-  const positiveRate =
-    feedbackStats.total > 0
-      ? `${Math.round((feedbackStats.positive / feedbackStats.total) * 100)}%`
-      : "待积累";
-  const liveMetrics = [
-    { label: "引用命中率", value: "92.4%", detail: "近 7 天稳定", icon: FileCheck2 },
-    { label: "用户正反馈", value: positiveRate, detail: `${feedbackStats.total} 条反馈已沉淀`, icon: ThumbsUp },
-    { label: "收藏回答", value: `${feedbackStats.favorites}`, detail: "可沉淀为优质样例", icon: Star },
-    { label: "待优化反馈", value: `${feedbackStats.negative}`, detail: "进入复核队列", icon: ThumbsDown },
-  ];
+function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("用户权限数据正在同步。");
+  const [error, setError] = useState("");
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+
+  const loadUsers = useCallback(async (options?: { silent?: boolean }) => {
+    setError("");
+    if (!options?.silent) {
+      setLoading(true);
+    }
+    try {
+      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const data = (await readJsonResponse(response)) as { users?: AuthUser[]; error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "用户列表加载失败。");
+      }
+      setUsers(data.users ?? []);
+      setNotice("用户权限数据已更新。");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "用户列表加载失败。");
+    } finally {
+      if (!options?.silent) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadUsers({ silent: true });
+    }, 5_000);
+    return () => window.clearInterval(id);
+  }, [loadUsers]);
+
+  useEffect(() => {
+    function refreshOnFocus() {
+      void loadUsers({ silent: true });
+    }
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
+  }, [loadUsers]);
+
+  async function updateRole(user: AuthUser, role: UserRole) {
+    if (user.role === role || user.coreAdmin || updatingUserId) {
+      return;
+    }
+    setError("");
+    setUpdatingUserId(user.id);
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const data = (await readJsonResponse(response)) as { user?: AuthUser | null; error?: string };
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || "权限更新失败。");
+      }
+      setUsers((current) => current.map((item) => (item.id === data.user?.id ? data.user : item)));
+      setNotice(`${data.user.email} 已更新为${role === "admin" ? "管理员" : "普通用户"}。`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "权限更新失败。");
+    } finally {
+      setUpdatingUserId(null);
+    }
+  }
+
+  const stats = useMemo(() => {
+    const admins = users.filter((user) => user.role === "admin").length;
+    const verified = users.filter((user) => user.emailVerifiedAt).length;
+    const activeToday = users.filter((user) => {
+      if (!user.lastLoginAt) {
+        return false;
+      }
+      return Date.now() / 1000 - user.lastLoginAt < 24 * 60 * 60;
+    }).length;
+    return { admins, verified, activeToday };
+  }, [users]);
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid max-w-[1400px] gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-4">
-          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[linear-gradient(135deg,#ffffff_0%,#f5faf8_100%)] p-5 shadow-[var(--shadow-panel)]">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <section className="flex min-h-0 flex-1 overflow-hidden bg-[linear-gradient(180deg,#f8fbfc_0%,#eef5f4_100%)] px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
+      <div className="mx-auto grid h-full min-h-0 w-full max-w-[1440px] gap-4">
+        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+          <div className="overflow-hidden rounded-2xl border border-white/80 bg-[linear-gradient(135deg,#ffffff_0%,#f7fbfa_58%,#edf6f4_100%)] p-4 shadow-[0_22px_70px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)] sm:p-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="max-w-2xl">
-                <div className="mb-3 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 text-xs font-medium text-[var(--accent-strong)] shadow-sm">
-                  <BarChart3 size={14} aria-hidden="true" />
-                  Quality Intelligence
+                <div className="mb-2 inline-flex h-8 items-center gap-2 rounded-full border border-[var(--accent-soft)] bg-white/78 px-3 text-xs font-semibold text-[var(--accent-strong)] shadow-sm">
+                  <UserCog size={14} aria-hidden="true" />
+                  User Operations
                 </div>
-                <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px]">质量分析中心</h1>
-                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                  汇总回答质量、引用可信度与边界拦截表现，帮助管理员持续优化知识治理闭环。
+                <h1 className="text-2xl font-semibold tracking-normal sm:text-[28px]">用户运维</h1>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                  查看浙大邮箱注册用户，分配管理员权限，维护校网范围内的可信访问边界。
                 </p>
               </div>
-              <Button type="button" variant="secondary">
-                <FileCheck2 size={16} aria-hidden="true" />
-                查看复核项
+              <Button type="button" variant="secondary" onClick={() => void loadUsers()} disabled={loading}>
+                {loading ? <Loader2 className="animate-spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
+                刷新用户
               </Button>
             </div>
 
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {liveMetrics.map((metric) => (
-                <QualityMetricCard key={metric.label} metric={metric} />
-              ))}
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <UserStatCard label="注册用户" value={`${users.length}`} detail="已完成邮箱验证" icon={Users} />
+              <UserStatCard label="管理员" value={`${stats.admins}`} detail="可运维知识库与权限" icon={ShieldCheck} />
+              <UserStatCard label="今日活跃" value={`${stats.activeToday}`} detail={`${stats.verified} 个已验证账号`} icon={HeartPulse} />
             </div>
           </div>
 
-          <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
+          <Card className="flex min-h-0 flex-col overflow-hidden border-white/80 bg-white/88 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl">
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-semibold">可信回答趋势</h2>
-                  <p className="text-xs text-[var(--muted)]">按天汇总引用完整度与用户反馈</p>
+                  <h2 className="text-sm font-semibold">用户列表</h2>
+                  <p className="text-xs text-[var(--muted)]">{notice}</p>
                 </div>
                 <span className="rounded-full border border-[var(--accent-soft)] bg-[var(--accent-tint)] px-2.5 py-1 text-xs font-medium text-[var(--accent-strong)]">
-                  近 7 天
+                  {currentUser.email}
                 </span>
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="grid min-h-[260px] gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                <div className="flex items-end gap-2 rounded-lg border border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbfc_100%)] p-4">
-                  {QUALITY_TRENDS.map((item) => (
-                    <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-                      <div className="flex h-40 w-full items-end rounded-full bg-[var(--panel-strong)] p-1">
-                        <div
-                          className="w-full rounded-full bg-[linear-gradient(180deg,#0d8b7f_0%,#006c63_100%)] shadow-[0_10px_24px_rgba(0,108,99,0.18)] transition-all duration-500 ease-out"
-                          style={{ height: `${item.value}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-[var(--muted)]">{item.label}</span>
-                    </div>
-                  ))}
+            <CardContent className="flex min-h-0 flex-1 flex-col">
+              {error ? (
+                <div className="mb-3 rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm font-medium text-[var(--danger)]">
+                  {error}
                 </div>
-
-                <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
-                  <h3 className="text-sm font-semibold">本周洞察</h3>
-                  <div className="mt-4 space-y-3">
-                    <QualityInsight icon={CheckCircle2} label="引用完整度提升" value="+8.6%" />
-                    <QualityInsight icon={ShieldCheck} label="越界拦截稳定" value="正常" />
-                    <QualityInsight icon={Clock3} label="响应耗时下降" value="-0.4s" />
-                  </div>
+              ) : null}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white">
+                <div className="grid grid-cols-[minmax(220px,1.3fr)_120px_160px_210px] items-center gap-3 border-b border-[var(--border)] bg-[var(--panel-muted)] px-4 py-3 text-xs font-semibold uppercase text-[var(--muted)] max-lg:hidden">
+                  <span>用户</span>
+                  <span>状态</span>
+                  <span>最近登录</span>
+                  <span>权限</span>
+                </div>
+                <div className="min-h-0 flex-1 divide-y divide-[var(--border)] overflow-y-auto">
+                  {loading && !users.length ? (
+                    <div className="flex min-h-[220px] items-center justify-center gap-2 text-sm text-[var(--muted)]">
+                      <Loader2 className="animate-spin" size={16} aria-hidden="true" />
+                      正在加载用户
+                    </div>
+                  ) : users.length ? (
+                    users.map((user) => (
+                      <UserRow
+                        key={user.id}
+                        user={user}
+                        currentUserId={currentUser.id}
+                        updating={updatingUserId === user.id}
+                        locked={Boolean(user.coreAdmin)}
+                        onChangeRole={(role) => void updateRole(user, role)}
+                      />
+                    ))
+                  ) : (
+                    <div className="flex min-h-[220px] items-center justify-center text-sm text-[var(--muted)]">
+                      暂无注册用户
+                    </div>
+                  )}
                 </div>
               </div>
             </CardContent>
           </Card>
         </div>
-
-        <aside className="space-y-4">
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">待复核回答</h2>
-              <p className="text-xs text-[var(--muted)]">优先处理影响引用可信度的问题</p>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {QUALITY_REVIEWS.map((review) => (
-                  <button
-                    key={review.title}
-                    type="button"
-                    onClick={() => setSelectedReview(review.title)}
-                    className={cn(
-                      "w-full rounded-lg border bg-white px-3 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md",
-                      selectedReview === review.title ? "border-[var(--accent)]" : "border-[var(--border)]",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{review.title}</p>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">{review.issue}</p>
-                      </div>
-                      <span
-                        className={cn(
-                          "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
-                          review.priority === "高"
-                            ? "bg-[var(--danger-soft)] text-[var(--danger)]"
-                            : "bg-[var(--warning-soft)] text-[var(--warning)]",
-                        )}
-                      >
-                        {review.priority}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs text-[var(--muted)]">
-                      {review.owner} · {review.status}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-[var(--shadow-soft)]">
-            <CardHeader>
-              <h2 className="text-sm font-semibold">治理建议</h2>
-              <p className="text-xs text-[var(--muted)]">面向管理员的持续优化动作</p>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <QualityAction title="合并重复引用" description="减少相同片段在回答中的重复展示。" />
-                <QualityAction title="更新低频资料" description="优先复核最近命中但版本较旧的文档。" />
-                <QualityAction title="观察边界问题" description="将高频超范围问题沉淀为后续知识建设线索。" />
-              </div>
-            </CardContent>
-          </Card>
-        </aside>
       </div>
     </section>
+  );
+}
+
+function UserStatCard({
+  label,
+  value,
+  detail,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  icon: typeof Users;
+}) {
+  return (
+    <div className="rounded-xl border border-white/80 bg-white/82 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs text-[var(--muted)]">{label}</p>
+          <p className="mt-2 text-3xl font-semibold leading-none">{value}</p>
+          <p className="mt-2 truncate text-xs text-[var(--muted)]">{detail}</p>
+        </div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+          <Icon size={18} aria-hidden="true" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UserRow({
+  user,
+  currentUserId,
+  updating,
+  locked,
+  onChangeRole,
+}: {
+  user: AuthUser;
+  currentUserId: string;
+  updating: boolean;
+  locked: boolean;
+  onChangeRole: (role: UserRole) => void;
+}) {
+  return (
+    <div className="grid gap-3 px-4 py-4 transition hover:bg-[var(--panel-muted)] lg:grid-cols-[minmax(220px,1.3fr)_120px_160px_210px] lg:items-center">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(145deg,#e8f7f4_0%,#ffffff_100%)] text-sm font-semibold text-[var(--accent-strong)] shadow-inner">
+          {user.name.slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-semibold">{user.name}</p>
+            {user.id === currentUserId ? <StatusChip label="当前" tone="ok" /> : null}
+            {locked ? <StatusChip label="核心" tone="warning" /> : null}
+          </div>
+          <p className="mt-1 truncate text-xs text-[var(--muted)]">{user.email}</p>
+        </div>
+      </div>
+
+      <div>
+        <StatusChip label={user.disabledAt ? "已停用" : "可访问"} tone={user.disabledAt ? "warning" : "ok"} />
+      </div>
+
+      <p className="text-sm text-[var(--muted)]">{formatTimestamp(user.lastLoginAt ?? user.createdAt ?? null)}</p>
+
+      <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--panel-muted)] p-1">
+        {(["user", "admin"] as const).map((role) => (
+          <button
+            key={role}
+            type="button"
+            disabled={locked || updating || user.role === role}
+            onClick={() => onChangeRole(role)}
+            className={cn(
+              "flex h-9 items-center justify-center gap-2 rounded-lg text-xs font-semibold transition",
+              user.role === role
+                ? "bg-white text-[var(--accent-strong)] shadow-sm"
+                : "text-[var(--muted)] hover:bg-white/78 hover:text-[var(--foreground)]",
+              (locked || updating) && "cursor-not-allowed opacity-70",
+            )}
+          >
+            {updating && user.role !== role ? <Loader2 className="animate-spin" size={13} aria-hidden="true" /> : null}
+            {role === "admin" ? "管理员" : "普通用户"}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1717,6 +1800,7 @@ function ProductSidebar({
   onChangeView,
   onToggleCollapse,
   onSignOut,
+  onOpenSettings,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1732,8 +1816,45 @@ function ProductSidebar({
   onChangeView: (view: WorkspaceView) => void;
   onToggleCollapse: () => void;
   onSignOut: () => void;
+  onOpenSettings: () => void;
 }) {
   const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  const [hoveringLogo, setHoveringLogo] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!accountMenuOpen) {
+      return;
+    }
+    function handlePointerDown(event: PointerEvent) {
+      if (accountMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setAccountMenuOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setAccountMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [accountMenuOpen]);
+
+  function openSettingsFromMenu() {
+    setAccountMenuOpen(false);
+    onOpenSettings();
+  }
+
+  function signOutFromMenu() {
+    setAccountMenuOpen(false);
+    onSignOut();
+  }
 
   return (
     <>
@@ -1752,27 +1873,48 @@ function ProductSidebar({
         )}
       >
         <div className={cn("flex h-16 shrink-0 items-center border-b border-[var(--border)] px-3", collapsed ? "lg:justify-center" : "justify-between")}>
-          <div className={cn("flex min-w-0 items-center gap-3", collapsed ? "lg:hidden" : "")}>
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
-              <BookOpenText size={20} aria-hidden="true" />
+          {collapsed ? (
+            <button
+              type="button"
+              className="group relative hidden h-11 w-11 items-center justify-center rounded-2xl bg-white text-[var(--accent-strong)] shadow-sm ring-1 ring-[var(--border)] transition hover:-translate-y-0.5 hover:bg-[var(--accent-tint)] hover:shadow-md lg:flex"
+              onMouseEnter={() => setHoveringLogo(true)}
+              onMouseLeave={() => setHoveringLogo(false)}
+              onFocus={() => setHoveringLogo(true)}
+              onBlur={() => setHoveringLogo(false)}
+              onClick={onToggleCollapse}
+              aria-label="展开侧栏"
+              title="展开侧栏"
+            >
+              <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
+                <BookOpenText size={22} aria-hidden="true" />
+              </span>
+              <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
+                <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
+              </span>
+              <IconTooltip label="展开侧栏" />
+            </button>
+          ) : (
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
+                <BookOpenText size={20} aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="truncate text-base font-semibold">xyfRAG</h2>
+                <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h2 className="truncate text-base font-semibold">xyfRAG</h2>
-              <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className={cn(
-              "hidden h-9 w-9 items-center justify-center rounded-xl text-[var(--muted)] transition hover:bg-white hover:text-[var(--foreground)] hover:shadow-sm lg:flex",
-              collapsed ? "" : "border border-[var(--border)] bg-white/70",
-            )}
-            onClick={onToggleCollapse}
-            aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
-            title={collapsed ? "展开侧栏" : "收起侧栏"}
-          >
-            {collapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
-          </button>
+          )}
+          {!collapsed ? (
+            <button
+              type="button"
+              className="hidden h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-white/70 text-[var(--muted)] transition hover:bg-white hover:text-[var(--foreground)] hover:shadow-sm lg:flex"
+              onClick={onToggleCollapse}
+              aria-label="收起侧栏"
+              title="收起侧栏"
+            >
+              <PanelLeftClose size={18} aria-hidden="true" />
+            </button>
+          ) : null}
           <button
             type="button"
             className="rounded-md p-2 text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
@@ -1896,21 +2038,39 @@ function ProductSidebar({
           </div>
         </div>
 
-        <div className={cn("shrink-0 border-t border-[var(--border)] p-3", collapsed ? "lg:px-2" : "")}>
+        <div
+          ref={accountMenuRef}
+          className={cn("relative shrink-0 border-t border-[var(--border)] p-3", collapsed ? "lg:px-2" : "")}
+        >
+          {accountMenuOpen ? (
+            <AccountMenu
+              collapsed={collapsed}
+              user={user}
+              onOpenSettings={openSettingsFromMenu}
+              onSignOut={signOutFromMenu}
+            />
+          ) : null}
           {collapsed ? (
             <button
               type="button"
-              onClick={onSignOut}
+              onClick={() => setAccountMenuOpen((value) => !value)}
               className="group relative hidden h-10 w-full items-center justify-center rounded-lg bg-white text-[var(--accent-strong)] shadow-sm transition hover:bg-[var(--panel-strong)] lg:flex"
-              aria-label={`${user.name} · 退出登录`}
+              aria-label={`${user.name} · 账户菜单`}
+              aria-expanded={accountMenuOpen}
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold">
                 {user.name.slice(0, 1)}
               </span>
-              <IconTooltip label={`${user.name} · 退出登录`} />
+              <IconTooltip label={`${user.name} · 账户菜单`} />
             </button>
           ) : (
-            <div className="rounded-lg border border-[var(--border)] bg-white/82 p-3 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setAccountMenuOpen((value) => !value)}
+              className="w-full rounded-lg border border-[var(--border)] bg-white/82 p-3 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+              aria-label={`${user.name} · 账户菜单`}
+              aria-expanded={accountMenuOpen}
+            >
               <div className="flex items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent-strong)]">
                   <ShieldCheck size={15} aria-hidden="true" />
@@ -1921,20 +2081,354 @@ function ProductSidebar({
                     {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={onSignOut}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]"
-                  aria-label="退出登录"
-                >
-                  <LogOut size={15} aria-hidden="true" />
-                </button>
+                <ChevronRight size={16} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
               </div>
-            </div>
+            </button>
           )}
         </div>
       </aside>
     </>
+  );
+}
+
+function AccountMenu({
+  collapsed,
+  user,
+  onOpenSettings,
+  onSignOut,
+}: {
+  collapsed: boolean;
+  user: AuthUser;
+  onOpenSettings: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "absolute bottom-[calc(100%+10px)] z-50 w-[280px] overflow-hidden rounded-2xl border border-white/80 bg-white/92 p-2 shadow-[0_24px_70px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.95)] backdrop-blur-2xl",
+        collapsed ? "left-3 lg:left-4" : "left-3",
+      )}
+    >
+      <div className="flex items-center gap-3 px-2 py-2.5">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#18a999_0%,#0b726a_100%)] text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,108,99,0.22)]">
+          {user.name.slice(0, 1)}
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{user.name}</p>
+          <p className="truncate text-xs text-[var(--muted)]">
+            {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
+          </p>
+        </div>
+      </div>
+      <div className="my-1 h-px bg-[var(--border)]" />
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--panel-muted)]"
+      >
+        <Settings size={18} aria-hidden="true" />
+        设置
+      </button>
+      <button
+        type="button"
+        onClick={onSignOut}
+        className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-[var(--danger)] transition hover:bg-[var(--danger-soft)]"
+      >
+        <LogOut size={18} aria-hidden="true" />
+        退出登录
+      </button>
+    </div>
+  );
+}
+
+type RuntimeConfig = {
+  ragUrl: string;
+  modelApiUrl: string;
+  apiKey: string;
+};
+
+type ConnectivityTarget = "rag" | "model";
+
+type ConnectivityResult = {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  message: string;
+};
+
+const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
+  ragUrl: "http://127.0.0.1:8000",
+  modelApiUrl: "https://api.openai.com/v1",
+  apiKey: "",
+};
+
+function AccountSettingsModal({
+  user,
+  onClose,
+}: {
+  user: AuthUser;
+  onClose: () => void;
+}) {
+  const storageKey = `xyfrag.runtime-config.${user.id}`;
+  const [config, setConfig] = useState<RuntimeConfig>(DEFAULT_RUNTIME_CONFIG);
+  const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState<ConnectivityTarget | null>(null);
+  const [results, setResults] = useState<Partial<Record<ConnectivityTarget, ConnectivityResult>>>({});
+  const [activePanel, setActivePanel] = useState<"settings" | "connection">("settings");
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        setConfig({ ...DEFAULT_RUNTIME_CONFIG, ...(JSON.parse(raw) as Partial<RuntimeConfig>) });
+      }
+    } catch {
+      setConfig(DEFAULT_RUNTIME_CONFIG);
+    }
+  }, [storageKey]);
+
+  function updateConfig(key: keyof RuntimeConfig, value: string) {
+    setSaved(false);
+    setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  function saveConfig() {
+    window.localStorage.setItem(storageKey, JSON.stringify(config));
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1400);
+  }
+
+  async function testConnection(target: ConnectivityTarget) {
+    setTesting(target);
+    const url = target === "rag" ? config.ragUrl : config.modelApiUrl;
+    try {
+      const response = await fetch("/api/settings/connectivity-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target,
+          url,
+          apiKey: target === "model" ? config.apiKey : undefined,
+        }),
+      });
+      const data = (await response.json()) as ConnectivityResult;
+      setResults((current) => ({
+        ...current,
+        [target]: response.ok
+          ? data
+          : { ok: false, status: response.status, message: data.message || "连通性测试失败。" },
+      }));
+    } catch (error) {
+      setResults((current) => ({
+        ...current,
+        [target]: {
+          ok: false,
+          message: error instanceof Error ? error.message : "连通性测试失败。",
+        },
+      }));
+    } finally {
+      setTesting(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/18 px-4 py-6 backdrop-blur-md">
+      <div className="h-[min(650px,calc(100vh-3rem))] w-full max-w-[980px] overflow-hidden rounded-[28px] border border-white/85 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
+        <div className="grid h-full min-h-0 grid-cols-[230px_minmax(0,1fr)]">
+          <aside className="border-r border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f5faf9_100%)] p-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="mb-6 flex h-9 w-9 items-center justify-center rounded-xl text-[var(--foreground)] transition hover:bg-[var(--panel-strong)]"
+              aria-label="关闭设置"
+            >
+              <X size={20} aria-hidden="true" />
+            </button>
+            <div className="rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#18a999_0%,#0b726a_100%)] text-sm font-semibold text-white">
+                  {user.name.slice(0, 1)}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{user.name}</p>
+                  <p className="truncate text-xs text-[var(--muted)]">{user.role === "admin" ? "管理员" : "普通用户"}</p>
+                </div>
+              </div>
+            </div>
+            <nav className="mt-5 space-y-2">
+              <button
+                type="button"
+                onClick={() => setActivePanel("settings")}
+                className={cn(
+                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  activePanel === "settings"
+                    ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
+                    : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
+                )}
+              >
+                <Settings size={17} aria-hidden="true" />
+                设置
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivePanel("connection")}
+                className={cn(
+                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  activePanel === "connection"
+                    ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
+                    : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
+                )}
+              >
+                <ShieldCheck size={17} aria-hidden="true" />
+                连接
+              </button>
+            </nav>
+          </aside>
+
+          <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+            <header className="border-b border-[var(--border)] px-7 py-5">
+              <h2 className="text-xl font-semibold tracking-normal">{activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                {activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
+              </p>
+            </header>
+
+            <div className="min-h-0 overflow-hidden p-5">
+              {activePanel === "settings" ? (
+                <Card className="mx-auto min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+                  <CardHeader>
+                    <h3 className="text-sm font-semibold">配置</h3>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <SettingsField
+                      label="RAG 服务 URL"
+                      value={config.ragUrl}
+                      onChange={(value) => updateConfig("ragUrl", value)}
+                      placeholder="http://127.0.0.1:8000"
+                    />
+                    <SettingsField
+                      label="模型 API URL"
+                      value={config.modelApiUrl}
+                      onChange={(value) => updateConfig("modelApiUrl", value)}
+                      placeholder="https://api.openai.com/v1"
+                    />
+                    <SettingsField
+                      label="API Key"
+                      value={config.apiKey}
+                      onChange={(value) => updateConfig("apiKey", value)}
+                      placeholder="sk-..."
+                      type="password"
+                    />
+                    <Button type="button" variant="primary" className="w-full justify-center" onClick={saveConfig}>
+                      <CheckCircle2 size={15} aria-hidden="true" />
+                      {saved ? "已保存" : "保存配置"}
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="mx-auto min-h-0 max-w-[620px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+                  <CardHeader>
+                    <h3 className="text-sm font-semibold">测试</h3>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <ConnectivityCard
+                      title="RAG 服务"
+                      description={config.ragUrl}
+                      testing={testing === "rag"}
+                      result={results.rag}
+                      onTest={() => void testConnection("rag")}
+                    />
+                    <ConnectivityCard
+                      title="模型 API"
+                      description={config.modelApiUrl}
+                      testing={testing === "model"}
+                      result={results.model}
+                      onTest={() => void testConnection("model")}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: "text" | "password";
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-semibold text-[var(--foreground)]">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-11 w-full rounded-xl border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:shadow-[0_0_0_4px_rgba(0,108,99,0.08)]"
+      />
+    </label>
+  );
+}
+
+function ConnectivityCard({
+  title,
+  description,
+  testing,
+  result,
+  onTest,
+}: {
+  title: string;
+  description: string;
+  testing: boolean;
+  result?: ConnectivityResult;
+  onTest: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{title}</p>
+          <p className="mt-1 truncate text-xs text-[var(--muted)]">{description || "-"}</p>
+        </div>
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold",
+            result
+              ? result.ok
+                ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]"
+                : "bg-[var(--danger-soft)] text-[var(--danger)]"
+              : "bg-[var(--panel-muted)] text-[var(--muted)]",
+          )}
+        >
+          {result ? (result.ok ? "可用" : "失败") : "待测"}
+        </span>
+      </div>
+      <Button type="button" variant="secondary" size="sm" className="mt-4 w-full justify-center" onClick={onTest} disabled={testing}>
+        {testing ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : <HeartPulse size={14} aria-hidden="true" />}
+        连通性测试
+      </Button>
+      {result ? (
+        <div className="mt-3 rounded-xl border border-[var(--border)] bg-white/78 px-3 py-2">
+          <p className="text-xs font-medium text-[var(--foreground)]">{result.message}</p>
+          <p className="mt-1 text-[11px] text-[var(--muted)]">
+            {result.status ? `HTTP ${result.status}` : "HTTP -"} · {result.latencyMs ? `${result.latencyMs}ms` : "-"}
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1944,16 +2438,12 @@ function ProductHeader({
   user,
   onSignOut,
   onOpenSidebar,
-  sidebarCollapsed,
-  onExpandSidebar,
 }: {
   health: BackendHealth | null;
   healthOk: boolean;
   user: AuthUser;
   onSignOut: () => void;
   onOpenSidebar: () => void;
-  sidebarCollapsed: boolean;
-  onExpandSidebar: () => void;
 }) {
   return (
     <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
@@ -1967,17 +2457,6 @@ function ProductHeader({
           >
             <Menu size={18} aria-hidden="true" />
           </button>
-          {sidebarCollapsed ? (
-            <button
-              type="button"
-              className="hidden h-9 w-9 items-center justify-center rounded-md border border-[var(--border)] bg-white text-[var(--muted)] shadow-sm transition hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)] lg:flex"
-              onClick={onExpandSidebar}
-              aria-label="展开侧栏"
-              title="展开侧栏"
-            >
-              <PanelLeftOpen size={18} aria-hidden="true" />
-            </button>
-          ) : null}
           <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 shadow-sm md:flex">
             <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
             <span className="truncate text-sm text-[var(--muted)]">搜索会话、文档或引用来源</span>
@@ -2386,64 +2865,6 @@ function formatMetricPercent(value?: number) {
     return "-";
   }
   return `${Math.round(value * 100)}%`;
-}
-
-function QualityMetricCard({
-  metric,
-}: {
-  metric: QualityMetric;
-}) {
-  const Icon = metric.icon;
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-white/84 p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-xs text-[var(--muted)]">{metric.label}</p>
-          <p className="mt-2 text-2xl font-semibold leading-none">{metric.value}</p>
-          <p className="mt-2 truncate text-xs text-[var(--muted)]">{metric.detail}</p>
-        </div>
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
-          <Icon size={17} aria-hidden="true" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function QualityInsight({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof CheckCircle2;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--panel-muted)] px-3 py-2">
-      <span className="flex min-w-0 items-center gap-2 text-sm text-[var(--muted)]">
-        <Icon size={15} className="shrink-0 text-[var(--accent)]" aria-hidden="true" />
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="shrink-0 text-sm font-semibold">{value}</span>
-    </div>
-  );
-}
-
-function QualityAction({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-white p-3 shadow-sm">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
-          <CheckCircle2 size={14} aria-hidden="true" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">{title}</p>
-          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{description}</p>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function StatusBadge({ status }: { status: "idle" | "streaming" | "error" }) {
@@ -2947,6 +3368,18 @@ async function readResponseError(response: Response, fallback: string) {
     return data.detail || data.error || fallback;
   } catch {
     return fallback;
+  }
+}
+
+async function readJsonResponse(response: Response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { error: text };
   }
 }
 

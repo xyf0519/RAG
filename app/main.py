@@ -229,12 +229,26 @@ class AuthUserResponse(BaseModel):
     name: str
     email: str
     role: str
+    email_verified_at: Optional[float] = None
+    created_at: Optional[float] = None
+    last_login_at: Optional[float] = None
+    disabled_at: Optional[float] = None
+    core_admin: bool = False
 
 
 class AuthResponse(BaseModel):
     ok: bool
     user: Optional[AuthUserResponse] = None
     message: str = ""
+
+
+class AuthUsersResponse(BaseModel):
+    ok: bool
+    users: list[AuthUserResponse]
+
+
+class UserRoleUpdateRequest(BaseModel):
+    role: Literal["user", "admin"]
 
 
 def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
@@ -377,6 +391,45 @@ async def auth_get_user(user_id: str, _internal: InternalAuth) -> AuthResponse:
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return AuthResponse(ok=True, user=_auth_user_response(user))
+
+
+@app.get("/api/v1/auth/users", response_model=AuthUsersResponse)
+async def auth_list_users(_internal: InternalAuth) -> AuthUsersResponse:
+    store: AuthStore = app.state.auth_store
+    return AuthUsersResponse(ok=True, users=[_auth_user_response(user, store) for user in store.list_users()])
+
+
+@app.get("/api/v1/auth/admin/users", response_model=AuthUsersResponse)
+async def auth_admin_list_users(_internal: InternalAuth) -> AuthUsersResponse:
+    return await auth_list_users(_internal)
+
+
+@app.patch("/api/v1/auth/users/{user_id}/role", response_model=AuthResponse)
+async def auth_update_user_role(
+    user_id: str,
+    request: UserRoleUpdateRequest,
+    operator_user_id: str,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        operator = store.require_user(operator_user_id)
+        if operator.role != "admin":
+            raise HTTPException(status_code=403, detail="需要管理员权限。")
+        user = store.update_user_role(user_id, request.role, operator)
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user, store), message="权限已更新。")
+
+
+@app.patch("/api/v1/auth/admin/users/{user_id}/role", response_model=AuthResponse)
+async def auth_admin_update_user_role(
+    user_id: str,
+    request: UserRoleUpdateRequest,
+    operator_user_id: str,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    return await auth_update_user_role(user_id, request, operator_user_id, _internal)
 
 
 @app.post("/api/v1/auth/password-reset/start", response_model=AuthResponse)
@@ -857,12 +910,17 @@ def _classifier_model_response(record: ClassifierModelRecord) -> ClassifierModel
     return ClassifierModelResponse(**record.__dict__)
 
 
-def _auth_user_response(record: AuthUserRecord) -> AuthUserResponse:
+def _auth_user_response(record: AuthUserRecord, store: AuthStore | None = None) -> AuthUserResponse:
     return AuthUserResponse(
         id=record.id,
         name=record.name,
         email=record.email,
         role=record.role,
+        email_verified_at=record.email_verified_at,
+        created_at=record.created_at,
+        last_login_at=record.last_login_at,
+        disabled_at=record.disabled_at,
+        core_admin=store.is_core_admin(record.email) if store else False,
     )
 
 
