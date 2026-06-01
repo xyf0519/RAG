@@ -22,6 +22,11 @@ models/huggingface/
 web/.next/
 web/.env.local
 web/node_modules/
+!web/build/
+web/build/*
+!web/build/icon.png
+!web/build/icon.icns
+!web/build/icon.ico
 web/build/backend/
 web/playwright-report/
 web/test-results/

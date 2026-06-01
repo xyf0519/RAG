@@ -4,7 +4,7 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ ok: true, backend: { ok: true, app: "xyfRAG" } }),
+      body: JSON.stringify({ ok: true, backend: { ok: true, app: "Maverella" } }),
     });
   });
   await page.route("**/api/knowledge-bases", async (route) => {

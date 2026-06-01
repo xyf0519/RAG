@@ -402,14 +402,14 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
     username = os.getenv("SMTP_USER", "")
     password = os.getenv("SMTP_PASSWORD", "")
     if not smtp_host or not smtp_from or not username or not password:
-        print(f"[xyfRAG auth] {purpose} code for {email}: {code}")
+        print(f"[Maverella auth] {purpose} code for {email}: {code}")
         return
 
     message = EmailMessage()
-    message["Subject"] = "xyfRAG 邮箱验证码"
+    message["Subject"] = "Maverella 邮箱验证码"
     message["From"] = smtp_from
     message["To"] = email
-    message.set_content(f"你的 xyfRAG 验证码是：{code}\n\n验证码 10 分钟内有效，请勿转发。")
+    message.set_content(f"你的 Maverella 验证码是：{code}\n\n验证码 10 分钟内有效，请勿转发。")
 
     port = int(os.getenv("SMTP_PORT", "465"))
     mode = os.getenv("SMTP_SECURITY", os.getenv("SMTP_TLS", "ssl")).lower()

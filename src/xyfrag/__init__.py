@@ -1,2 +1,1 @@
-"""xyfRAG package."""
-
+"""Maverella backend package."""

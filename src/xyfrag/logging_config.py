@@ -1,4 +1,4 @@
-"""Logging configuration for xyfRAG."""
+"""Logging configuration for Maverella."""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ export function isDesktopMode() {
 export const DESKTOP_USER: AuthUser = {
   id: "desktop-local-user",
   name: "本机用户",
-  email: "local@desktop.xyfrag",
+  email: "local@desktop.maverella",
   role: "user",
   emailVerifiedAt: null,
   createdAt: null,

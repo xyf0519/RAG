@@ -12,11 +12,11 @@
     "start:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next start --hostname 127.0.0.1",
     "electron": "electron .",
     "desktop:dev": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop electron .",
-    "desktop:backend": "cd .. && scripts/build_desktop_backend.sh",
+    "desktop:backend": "node ../scripts/build_desktop_backend.mjs",
     "desktop:pack": "npm run build:desktop && npm run desktop:backend && electron-builder --dir",
     "desktop:dist": "npm run build:desktop && npm run desktop:backend && electron-builder",
     "desktop:dist:mac": "npm run build:desktop && npm run desktop:backend && electron-builder --mac dmg",
-    "desktop:dist:win": "npm run build:desktop && npm run desktop:backend && electron-builder --win nsis",
+    "desktop:dist:win": "node ../scripts/assert_windows_build.mjs && npm run build:desktop && npm run desktop:backend && electron-builder --win nsis",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -55,8 +55,8 @@
     "node": ">=24 <25"
   },
   "build": {
-    "appId": "cn.xyfrag.desktop",
-    "productName": "xyfRAG",
+    "appId": "cn.maverella.desktop",
+    "productName": "Maverella",
     "asar": false,
     "directories": {
       "output": "dist"
@@ -93,10 +93,12 @@
     ],
     "mac": {
       "target": ["dmg"],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns"
     },
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis"],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

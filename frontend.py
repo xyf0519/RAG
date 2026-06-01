@@ -1,4 +1,4 @@
-"""Gradio frontend for xyfRAG."""
+"""Gradio frontend for Maverella."""
 
 from __future__ import annotations
 
@@ -129,9 +129,9 @@ def build_app() -> gr.Blocks:
     settings = get_settings()
     configure_logging(settings)
 
-    with gr.Blocks(title="xyfRAG") as demo:
+    with gr.Blocks(title="Maverella") as demo:
         session_state = gr.State(str(uuid4()))
-        gr.Markdown("# xyfRAG 校园资料库问答")
+        gr.Markdown("# Maverella 校园资料库问答")
         with gr.Row():
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(type="messages", height=520)

@@ -1,6 +1,6 @@
 # 桌面端开发与打包
 
-本分支 `feature/desktop-electron-local-rag` 将 xyfRAG 做成本机单用户桌面应用。Electron 启动本地 FastAPI/RAG 后端，再打开桌面模式的 Next.js 工作台。
+本分支 `feature/desktop-electron-local-rag` 将 Maverella 做成本机单用户桌面应用。Electron 启动本地 FastAPI/RAG 后端，再打开桌面模式的 Next.js 工作台。
 
 ## 功能边界
 
@@ -8,6 +8,7 @@
 - 隐藏用户运维、权限分配等管理员功能。
 - 保留个人资料库：创建知识库、上传 Markdown/TXT、构建索引、选择知识库问答。
 - 设置面板保存 OpenAI/DeepSeek 兼容 API Key、Base URL 和模型名到本机数据目录。
+- 设置面板可联网下载并启用 BGE 1.5 或 BGE 3.0，本地模型文件保存在用户数据目录。
 - 不内置大语言模型；未配置 API Key 时使用本地抽取式回答。
 
 ## 本地开发
@@ -52,7 +53,7 @@ cd web
 npm run desktop:dist:mac
 ```
 
-Windows EXE 安装包：
+Windows EXE 安装包，需要在 Windows 环境执行：
 
 ```bash
 cd web
@@ -72,16 +73,16 @@ npm run desktop:dist
 web/dist/
 ```
 
-打包命令会先运行 `scripts/build_desktop_backend.sh`，用 PyInstaller 生成 `web/build/backend/xyfrag-backend`，再把它放进安装包。用户打开 App 时不需要手动安装 Python 或后端依赖。
+打包命令会先运行 `scripts/build_desktop_backend.mjs`，用 PyInstaller 生成 `web/build/backend/maverella-backend` 或 `maverella-backend.exe`，再把它放进安装包。用户打开 App 时不需要手动安装 Python 或后端依赖。
 
 ## 首次启动
 
 - App 会创建本机数据目录，并自动复制默认资料、创建默认知识库、构建索引。
 - 桌面模式默认关闭边界分类器，个人资料库问题会直接进入检索问答。
-- 首次启动不强制下载 BGE 1.5 模型；默认使用内置 hashing embedding 与 lexical reranker，保证直接进入工作台。
-- 桌面日志写入 macOS `~/Library/Application Support/xyfRAG/rag-data/logs/`，便于排查启动失败。
+- 首次启动不强制下载 BGE 模型；默认使用内置 hashing embedding 与 lexical reranker，保证直接进入工作台。
+- 桌面日志写入 macOS `~/Library/Application Support/Maverella/rag-data/logs/`，便于排查启动失败。
 
 ## 注意
 
 - Windows 和 macOS 最好分别在对应系统上构建，以减少签名、权限和二进制兼容问题。
-- 模型权重默认不捆绑进安装包，用户可按需下载到桌面数据目录或使用 hashing fallback。
+- 模型权重默认不捆绑进安装包，用户可在设置面板按需下载到桌面数据目录或使用 hashing fallback。

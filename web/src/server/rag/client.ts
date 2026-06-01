@@ -2,6 +2,7 @@ import type { ChatRequest } from "@/shared/types/chat";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_TIMEOUT_MS = 60_000;
+const LONG_TIMEOUT_MS = 30 * 60_000;
 
 export function getBackendUrl() {
   return (process.env.RAG_BACKEND_URL ?? DEFAULT_BACKEND_URL).replace(/\/$/, "");
@@ -53,10 +54,13 @@ export async function proxyChatStream(payload: ChatRequest, requestId: string) {
 }
 
 export async function proxyBackendJson(path: string, init?: RequestInit) {
+  const timeoutMs = path.startsWith("/api/v1/desktop/embedding-models")
+    ? LONG_TIMEOUT_MS
+    : DEFAULT_TIMEOUT_MS;
   const response = await fetch(`${getBackendUrl()}${path}`, {
     ...init,
     cache: "no-store",
-    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: init?.body instanceof FormData
       ? withInternalAuth(init.headers)
       : {

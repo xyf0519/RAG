@@ -1,4 +1,4 @@
-"""Send a real xyfRAG verification email for SMTP validation."""
+"""Send a real Maverella verification email for SMTP validation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from xyfrag.config import get_settings
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Send a test xyfRAG email verification code.")
+    parser = argparse.ArgumentParser(description="Send a test Maverella email verification code.")
     parser.add_argument("email", help="Recipient email address.")
     parser.add_argument("--code", default="123456", help="Verification code to send.")
     args = parser.parse_args()

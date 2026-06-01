@@ -1,4 +1,4 @@
-"""Build the xyfRAG retrieval index from raw documents."""
+"""Build the Maverella retrieval index from raw documents."""
 
 from __future__ import annotations
 

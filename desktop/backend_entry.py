@@ -1,4 +1,4 @@
-"""Packaged desktop backend entrypoint for xyfRAG."""
+"""Packaged desktop backend entrypoint for Maverella."""
 
 from __future__ import annotations
 
@@ -42,10 +42,10 @@ def default_user_root() -> Path:
     """Fallback data directory when Electron does not provide one."""
 
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "xyfRAG" / "rag-data"
+        return Path.home() / "Library" / "Application Support" / "Maverella" / "rag-data"
     if sys.platform == "win32":
-        return Path(os.getenv("APPDATA", Path.home() / "AppData" / "Roaming")) / "xyfRAG" / "rag-data"
-    return Path.home() / ".local" / "share" / "xyfRAG" / "rag-data"
+        return Path(os.getenv("APPDATA", Path.home() / "AppData" / "Roaming")) / "Maverella" / "rag-data"
+    return Path.home() / ".local" / "share" / "Maverella" / "rag-data"
 
 
 def parse_args() -> argparse.Namespace:
@@ -99,6 +99,9 @@ def ensure_default_workspace() -> None:
 def main() -> None:
     args = parse_args()
     apply_path_env(args)
+    from app.main import apply_desktop_config
+
+    apply_desktop_config()
     ensure_default_workspace()
 
     import uvicorn

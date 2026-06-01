@@ -1,4 +1,4 @@
-"""Configuration loading utilities for xyfRAG."""
+"""Configuration loading utilities for Maverella."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(
 class AppConfig(BaseModel):
     """Application server settings."""
 
-    name: str = "xyfRAG"
+    name: str = "Maverella"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -34,7 +34,7 @@ class PathConfig(BaseModel):
     knowledge_bases_dir: Path = Path("data/knowledge_bases")
     knowledge_models_dir: Path = Path("models/knowledge_bases")
     ops_db: Path = Path("data/ops.sqlite3")
-    log_file: Path = Path("logs/xyfrag.log")
+    log_file: Path = Path("logs/maverella.log")
 
 
 class BoundaryClassifierConfig(BaseModel):
@@ -117,7 +117,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _project_path(path: Path) -> Path:
-    """Resolve a path relative to the xyfRAG project root.
+    """Resolve a path relative to the Maverella project root.
 
     Args:
         path: User configured path.
@@ -170,7 +170,7 @@ def _apply_env_path_overrides(settings: Settings) -> Settings:
 
     logs_dir = os.getenv("XYFRAG_LOGS_DIR")
     if logs_dir:
-        settings.paths.log_file = Path(logs_dir) / "xyfrag.log"
+        settings.paths.log_file = Path(logs_dir) / "maverella.log"
 
     explicit_paths = {
         "XYFRAG_RAW_DOCS_DIR": "raw_docs_dir",
@@ -210,6 +210,22 @@ def _apply_env_runtime_overrides(settings: Settings) -> Settings:
     use_local_models = _env_bool(os.getenv("XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"))
     if use_local_models is not None:
         settings.retrieval.use_local_models = use_local_models
+
+    embedding_backend = os.getenv("XYFRAG_EMBEDDING_BACKEND")
+    if embedding_backend:
+        settings.retrieval.embedding_backend = embedding_backend
+
+    embedding_model = os.getenv("XYFRAG_EMBEDDING_MODEL")
+    if embedding_model:
+        settings.retrieval.embedding_model = embedding_model
+
+    reranker_backend = os.getenv("XYFRAG_RERANKER_BACKEND")
+    if reranker_backend:
+        settings.retrieval.reranker_backend = reranker_backend
+
+    reranker_model = os.getenv("XYFRAG_RERANKER_MODEL")
+    if reranker_model is not None:
+        settings.retrieval.reranker_model = reranker_model
 
     return settings
 

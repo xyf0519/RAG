@@ -7,7 +7,7 @@ const { spawn } = require("node:child_process");
 const BACKEND_PORT = Number(process.env.XYFRAG_DESKTOP_BACKEND_PORT || 8765);
 const FRONTEND_PORT = Number(process.env.XYFRAG_DESKTOP_FRONTEND_PORT || 3765);
 
-app.setName("xyfRAG");
+app.setName("Maverella");
 
 let backendProcess = null;
 let frontendProcess = null;
@@ -71,8 +71,8 @@ function seedDesktopData(repoRoot, dataRoot) {
 function pickPython() {
   const repoRoot = getRepoRoot();
   const bundledBackend = process.platform === "win32"
-    ? path.join(process.resourcesPath, "backend", "xyfrag-backend.exe")
-    : path.join(process.resourcesPath, "backend", "xyfrag-backend");
+    ? path.join(process.resourcesPath, "backend", "maverella-backend.exe")
+    : path.join(process.resourcesPath, "backend", "maverella-backend");
   if (app.isPackaged && fs.existsSync(bundledBackend)) {
     return bundledBackend;
   }
@@ -87,7 +87,7 @@ function pickPython() {
 
 function isBundledBackend(command) {
   const basename = path.basename(command).toLowerCase();
-  return basename === "xyfrag-backend" || basename === "xyfrag-backend.exe";
+  return basename === "maverella-backend" || basename === "maverella-backend.exe";
 }
 
 function spawnLogged(command, args, options) {
@@ -234,7 +234,7 @@ function loadingHtml(message) {
   </head>
   <body>
     <main>
-      <h1>xyfRAG</h1>
+      <h1>Maverella</h1>
       <p>${message}</p>
       <div class="bar" aria-hidden="true"></div>
     </main>
@@ -259,7 +259,7 @@ async function createWindow(message = "正在初始化本机资料库，马上�
     height: 860,
     minWidth: 1060,
     minHeight: 720,
-    title: "xyfRAG",
+    title: "Maverella",
     backgroundColor: "#f7f9f8",
     webPreferences: {
       contextIsolation: true,
@@ -287,7 +287,7 @@ async function boot() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       await showLoading("启动失败，请查看本机日志后重试。");
     }
-    dialog.showErrorBox("xyfRAG 启动失败", error instanceof Error ? error.message : String(error));
+    dialog.showErrorBox("Maverella 启动失败", error instanceof Error ? error.message : String(error));
     app.quit();
   }
 }

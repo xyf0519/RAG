@@ -1,4 +1,4 @@
-"""FastAPI backend for xyfRAG."""
+"""FastAPI backend for Maverella."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 import json
 import os
 import re
+import shutil
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -14,6 +15,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -42,6 +44,22 @@ from xyfrag.session import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
 
+PRODUCT_NAME = "Maverella"
+
+DESKTOP_EMBEDDING_MODELS = {
+    "bge-small-zh-v1.5": {
+        "label": "BGE 1.5",
+        "repo_id": "BAAI/bge-small-zh-v1.5",
+        "directory": "bge-small-zh-v1.5",
+    },
+    "bge-m3": {
+        "label": "BGE 3.0",
+        "repo_id": "BAAI/bge-m3",
+        "directory": "bge-m3",
+    },
+}
+DEFAULT_DESKTOP_EMBEDDING_MODEL = "bge-small-zh-v1.5"
+
 
 def is_desktop_mode() -> bool:
     return os.getenv("APP_MODE", "").lower() == "desktop" or os.getenv("XYFRAG_DESKTOP", "") == "1"
@@ -54,7 +72,14 @@ def desktop_config_path() -> Path:
     data_dir = os.getenv("XYFRAG_DATA_DIR")
     if data_dir:
         return Path(data_dir) / "desktop-settings.json"
-    return Path.home() / ".xyfrag" / "desktop-settings.json"
+    return Path.home() / ".maverella" / "desktop-settings.json"
+
+
+def desktop_models_root() -> Path:
+    models_dir = os.getenv("XYFRAG_MODELS_DIR")
+    if models_dir:
+        return Path(models_dir) / "huggingface"
+    return Path.home() / ".maverella" / "models" / "huggingface"
 
 
 def load_desktop_config() -> dict[str, str]:
@@ -82,6 +107,131 @@ def apply_desktop_config() -> None:
         value = config.get(key)
         if value:
             os.environ[env_name] = value
+    apply_desktop_embedding_config(config)
+
+
+def desktop_model_info(model_key: str) -> dict[str, str]:
+    if model_key not in DESKTOP_EMBEDDING_MODELS:
+        raise KeyError(model_key)
+    return DESKTOP_EMBEDDING_MODELS[model_key]
+
+
+def desktop_model_path(model_key: str) -> Path:
+    return desktop_models_root() / desktop_model_info(model_key)["directory"]
+
+
+def desktop_embedding_enabled(config: dict[str, str]) -> bool:
+    return config.get("embeddingUseLocal", "").lower() in {"1", "true", "yes", "on"}
+
+
+def apply_desktop_embedding_config(config: dict[str, str] | None = None) -> None:
+    config = config or load_desktop_config()
+    model_key = config.get("embeddingModelKey") or DEFAULT_DESKTOP_EMBEDDING_MODEL
+    try:
+        model_path = desktop_model_path(model_key)
+    except KeyError:
+        return
+    if not desktop_embedding_enabled(config) or not desktop_model_downloaded(model_key):
+        os.environ["XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"] = "0"
+        return
+    os.environ["XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"] = "1"
+    os.environ["XYFRAG_EMBEDDING_BACKEND"] = "bge"
+    os.environ["XYFRAG_EMBEDDING_MODEL"] = str(model_path)
+    os.environ["XYFRAG_RERANKER_BACKEND"] = "lexical"
+    os.environ["XYFRAG_RERANKER_MODEL"] = ""
+
+
+def desktop_model_downloaded(model_key: str) -> bool:
+    model_path = desktop_model_path(model_key)
+    return model_path.exists() and any(model_path.iterdir()) and (model_path / "config.json").exists()
+
+
+def desktop_model_size(model_key: str) -> int:
+    model_path = desktop_model_path(model_key)
+    if not model_path.exists():
+        return 0
+    return sum(path.stat().st_size for path in model_path.rglob("*") if path.is_file())
+
+
+def desktop_bge_runtime_available() -> bool:
+    try:
+        from FlagEmbedding import FlagModel  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def desktop_embedding_model_payload(model_key: str, config: dict[str, str]) -> dict[str, object]:
+    info = desktop_model_info(model_key)
+    return {
+        "key": model_key,
+        "label": info["label"],
+        "repo_id": info["repo_id"],
+        "downloaded": desktop_model_downloaded(model_key),
+        "enabled": desktop_embedding_enabled(config)
+        and config.get("embeddingModelKey") == model_key
+        and desktop_model_downloaded(model_key),
+        "runtime_available": desktop_bge_runtime_available(),
+        "path": str(desktop_model_path(model_key)),
+        "size_bytes": desktop_model_size(model_key),
+    }
+
+
+def save_desktop_config(values: dict[str, object]) -> dict[str, str]:
+    path = desktop_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_desktop_config()
+    payload = {
+        **existing,
+        **{key: value for key, value in values.items() if value is not None},
+        "updatedAt": time.time(),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return load_desktop_config()
+
+
+def download_desktop_embedding_model(model_key: str) -> None:
+    info = desktop_model_info(model_key)
+    target_path = desktop_model_path(model_key)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from huggingface_hub import snapshot_download
+    except ModuleNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="当前后端缺少 huggingface_hub，无法下载模型。") from exc
+
+    try:
+        snapshot_download(
+            repo_id=info["repo_id"],
+            local_dir=str(target_path),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+    except Exception as exc:
+        if target_path.exists() and not (target_path / "config.json").exists():
+            shutil.rmtree(target_path, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"模型下载失败：{exc}") from exc
+
+
+def activate_desktop_embedding_model(model_key: str) -> None:
+    save_desktop_config({
+        "embeddingModelKey": model_key,
+        "embeddingUseLocal": "1",
+    })
+    reset_desktop_runtime_after_embedding_change()
+
+
+def reset_desktop_runtime_after_embedding_change() -> None:
+    apply_desktop_config()
+    clear_settings_cache()
+    settings = get_settings()
+    configure_logging(settings)
+    if hasattr(app.state, "rag_services"):
+        app.state.rag_services.clear()
+    if hasattr(app.state, "knowledge_store"):
+        app.state.knowledge_store = KnowledgeBaseStore(settings)
+        job = app.state.knowledge_store.create_index_job(DEFAULT_KNOWLEDGE_BASE_ID)
+        if job.status != "succeeded":
+            raise HTTPException(status_code=500, detail=job.message)
 
 
 def verify_internal_api_key(
@@ -92,6 +242,12 @@ def verify_internal_api_key(
     expected = os.getenv("INTERNAL_API_KEY", "")
     if expected and x_internal_api_key != expected:
         raise HTTPException(status_code=401, detail="内部服务令牌无效。")
+
+
+def clear_settings_cache() -> None:
+    cache_clear = getattr(get_settings, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
 
 
 class ChatRequest(BaseModel):
@@ -310,6 +466,30 @@ class DesktopSettingsResponse(BaseModel):
     updated_at: Optional[float] = None
 
 
+class DesktopEmbeddingModelResponse(BaseModel):
+    key: str
+    label: str
+    repo_id: str
+    downloaded: bool
+    enabled: bool
+    runtime_available: bool
+    path: str
+    size_bytes: int
+
+
+class DesktopEmbeddingModelsResponse(BaseModel):
+    ok: bool
+    default_model_key: str
+    active_model_key: str
+    models: list[DesktopEmbeddingModelResponse]
+    message: str = ""
+
+
+class DesktopEmbeddingModelActionRequest(BaseModel):
+    action: Literal["download", "activate", "disable"]
+    model_key: str = Field(default=DEFAULT_DESKTOP_EMBEDDING_MODEL)
+
+
 def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> RAGService:
     """Return a RAG service scoped to one knowledge base.
 
@@ -362,8 +542,9 @@ async def lifespan(app: FastAPI) -> Any:
         None.
     """
 
-    settings = get_settings()
     apply_desktop_config()
+    clear_settings_cache()
+    settings = get_settings()
     configure_logging(settings)
     app.state.sessions = InMemorySessionStore()
     app.state.knowledge_store = KnowledgeBaseStore(settings)
@@ -376,7 +557,7 @@ async def lifespan(app: FastAPI) -> Any:
     yield
 
 
-app = FastAPI(title="xyfRAG", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=PRODUCT_NAME, version="0.1.0", lifespan=lifespan)
 InternalAuth = Annotated[None, Depends(verify_internal_api_key)]
 
 
@@ -544,17 +725,12 @@ async def update_desktop_settings(
     if not is_desktop_mode():
         raise HTTPException(status_code=404, detail="桌面设置仅在本地桌面模式可用。")
 
-    now = time.time()
-    path = desktop_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_desktop_config()
-    payload = {
+    payload = save_desktop_config({
         "apiKey": request.api_key.strip() or existing.get("apiKey", ""),
         "baseUrl": request.base_url.strip().rstrip("/") or "https://api.deepseek.com",
         "model": request.model.strip() or get_settings().llm.model,
-        "updatedAt": now,
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    })
     apply_desktop_config()
     services: dict[str, RAGService] = app.state.rag_services
     services.clear()
@@ -563,7 +739,72 @@ async def update_desktop_settings(
         api_key_configured=bool(payload["apiKey"]),
         base_url=payload["baseUrl"],
         model=payload["model"],
-        updated_at=now,
+        updated_at=float(payload["updatedAt"]) if payload.get("updatedAt") else None,
+    )
+
+
+@app.get("/api/v1/desktop/embedding-models", response_model=DesktopEmbeddingModelsResponse)
+async def get_desktop_embedding_models(_internal: InternalAuth) -> DesktopEmbeddingModelsResponse:
+    if not is_desktop_mode():
+        raise HTTPException(status_code=404, detail="桌面模型设置仅在本地桌面模式可用。")
+    config = load_desktop_config()
+    active_model_key = config.get("embeddingModelKey") or DEFAULT_DESKTOP_EMBEDDING_MODEL
+    return DesktopEmbeddingModelsResponse(
+        ok=True,
+        default_model_key=DEFAULT_DESKTOP_EMBEDDING_MODEL,
+        active_model_key=active_model_key,
+        models=[
+            DesktopEmbeddingModelResponse(**desktop_embedding_model_payload(model_key, config))
+            for model_key in DESKTOP_EMBEDDING_MODELS
+        ],
+    )
+
+
+@app.post("/api/v1/desktop/embedding-models", response_model=DesktopEmbeddingModelsResponse)
+async def update_desktop_embedding_model(
+    request: DesktopEmbeddingModelActionRequest,
+    _internal: InternalAuth,
+) -> DesktopEmbeddingModelsResponse:
+    if not is_desktop_mode():
+        raise HTTPException(status_code=404, detail="桌面模型设置仅在本地桌面模式可用。")
+    if request.model_key not in DESKTOP_EMBEDDING_MODELS:
+        raise HTTPException(status_code=400, detail="不支持的嵌入模型。")
+
+    message = ""
+    if request.action == "download":
+        if not desktop_bge_runtime_available():
+            raise HTTPException(
+                status_code=409,
+                detail="当前桌面后端未包含 BGE 运行库，请使用包含本地模型运行库的桌面构建。",
+            )
+        await run_in_threadpool(download_desktop_embedding_model, request.model_key)
+        await run_in_threadpool(activate_desktop_embedding_model, request.model_key)
+        message = "模型已下载并启用。"
+    elif request.action == "activate":
+        if not desktop_model_downloaded(request.model_key):
+            raise HTTPException(status_code=400, detail="模型尚未下载。")
+        if not desktop_bge_runtime_available():
+            raise HTTPException(
+                status_code=409,
+                detail="当前桌面后端未包含 BGE 运行库，请使用包含本地模型运行库的桌面构建。",
+            )
+        await run_in_threadpool(activate_desktop_embedding_model, request.model_key)
+        message = "模型已启用。"
+    else:
+        save_desktop_config({"embeddingUseLocal": "0"})
+        await run_in_threadpool(reset_desktop_runtime_after_embedding_change)
+        message = "已切换为轻量检索。"
+
+    config = load_desktop_config()
+    return DesktopEmbeddingModelsResponse(
+        ok=True,
+        default_model_key=DEFAULT_DESKTOP_EMBEDDING_MODEL,
+        active_model_key=config.get("embeddingModelKey") or DEFAULT_DESKTOP_EMBEDDING_MODEL,
+        models=[
+            DesktopEmbeddingModelResponse(**desktop_embedding_model_payload(model_key, config))
+            for model_key in DESKTOP_EMBEDDING_MODELS
+        ],
+        message=message,
     )
 
 

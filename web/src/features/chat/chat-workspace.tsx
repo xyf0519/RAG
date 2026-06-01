@@ -3,13 +3,13 @@
 import {
   Activity,
   Archive,
-  BookOpenText,
   Bot,
   BrainCircuit,
   CheckCircle2,
   ChevronRight,
   Copy,
   Database,
+  Download,
   FilePlus2,
   FileText,
   HelpCircle,
@@ -97,6 +97,7 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
+const PRODUCT_NAME = "Maverella";
 
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
@@ -433,7 +434,7 @@ function ChatWorkspaceView({
           <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="truncate text-sm font-semibold">xyfRAG</h1>
+                <h1 className="truncate text-sm font-semibold">{PRODUCT_NAME}</h1>
                 <StatusBadge status={chat.status} />
               </div>
               <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
@@ -1909,7 +1910,7 @@ function ProductSidebar({
               title="展开侧栏"
             >
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
-                <BookOpenText size={22} aria-hidden="true" />
+                <Image src="/images/icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-xl object-cover" aria-hidden="true" />
               </span>
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
                 <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
@@ -1918,11 +1919,9 @@ function ProductSidebar({
             </button>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
-                <BookOpenText size={20} aria-hidden="true" />
-              </div>
+              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">xyfRAG</h2>
+                <h2 className="truncate text-base font-semibold">{PRODUCT_NAME}</h2>
                 <p className="truncate text-xs text-[var(--muted)]">
                   {desktopMode ? "本机个人知识问答" : "产业级知识问答中枢"}
                 </p>
@@ -2187,6 +2186,25 @@ type ConnectivityResult = {
   message: string;
 };
 
+type DesktopEmbeddingModel = {
+  key: string;
+  label: string;
+  repo_id: string;
+  downloaded: boolean;
+  enabled: boolean;
+  runtime_available: boolean;
+  path: string;
+  size_bytes: number;
+};
+
+type DesktopEmbeddingModelsResponse = {
+  ok: boolean;
+  default_model_key: string;
+  active_model_key: string;
+  models: DesktopEmbeddingModel[];
+  message?: string;
+};
+
 const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   ragUrl: "http://127.0.0.1:8000",
   modelApiUrl: "https://api.deepseek.com",
@@ -2208,6 +2226,9 @@ function AccountSettingsModal({
   const [results, setResults] = useState<Partial<Record<ConnectivityTarget, ConnectivityResult>>>({});
   const [activePanel, setActivePanel] = useState<"settings" | "connection">("settings");
   const [settingsError, setSettingsError] = useState("");
+  const [embeddingModels, setEmbeddingModels] = useState<DesktopEmbeddingModelsResponse | null>(null);
+  const [embeddingBusy, setEmbeddingBusy] = useState<string | null>(null);
+  const [embeddingNotice, setEmbeddingNotice] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -2255,6 +2276,29 @@ function AccountSettingsModal({
       mounted = false;
     };
   }, [storageKey]);
+
+  const refreshEmbeddingModels = useCallback(async () => {
+    if (!IS_DESKTOP_MODE) {
+      return;
+    }
+    try {
+      const response = await fetch("/api/desktop/embedding-models", { cache: "no-store" });
+      const data = (await response.json()) as DesktopEmbeddingModelsResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "桌面模型状态读取失败。");
+      }
+      setEmbeddingModels(data);
+      if (data.message) {
+        setEmbeddingNotice(data.message);
+      }
+    } catch (error) {
+      setEmbeddingNotice(error instanceof Error ? error.message : "桌面模型状态读取失败。");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshEmbeddingModels();
+  }, [refreshEmbeddingModels]);
 
   function updateConfig(key: keyof RuntimeConfig, value: string) {
     setSaved(false);
@@ -2324,6 +2368,28 @@ function AccountSettingsModal({
     }
   }
 
+  async function runEmbeddingAction(action: "download" | "activate" | "disable", modelKey: string) {
+    setEmbeddingBusy(`${action}:${modelKey}`);
+    setEmbeddingNotice("");
+    try {
+      const response = await fetch("/api/desktop/embedding-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, model_key: modelKey }),
+      });
+      const data = (await response.json()) as DesktopEmbeddingModelsResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "桌面模型操作失败。");
+      }
+      setEmbeddingModels(data);
+      setEmbeddingNotice(data.message || "模型设置已更新。");
+    } catch (error) {
+      setEmbeddingNotice(error instanceof Error ? error.message : "桌面模型操作失败。");
+    } finally {
+      setEmbeddingBusy(null);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/18 px-4 py-6 backdrop-blur-md">
       <div className="h-[min(650px,calc(100vh-3rem))] w-full max-w-[980px] overflow-hidden rounded-[28px] border border-white/85 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
@@ -2388,48 +2454,59 @@ function AccountSettingsModal({
 
             <div className="min-h-0 overflow-hidden p-5">
               {activePanel === "settings" ? (
-                <Card className="mx-auto min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
-                  <CardHeader>
-                    <h3 className="text-sm font-semibold">配置</h3>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <SettingsField
-                      label="RAG 服务 URL"
-                      value={config.ragUrl}
-                      onChange={(value) => updateConfig("ragUrl", value)}
-                      placeholder="http://127.0.0.1:8000"
-                      disabled={IS_DESKTOP_MODE}
+                <div className="h-full min-h-0 overflow-y-auto pb-3">
+                  <Card className="mx-auto min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+                    <CardHeader>
+                      <h3 className="text-sm font-semibold">配置</h3>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <SettingsField
+                        label="RAG 服务 URL"
+                        value={config.ragUrl}
+                        onChange={(value) => updateConfig("ragUrl", value)}
+                        placeholder="http://127.0.0.1:8000"
+                        disabled={IS_DESKTOP_MODE}
+                      />
+                      <SettingsField
+                        label="模型 API URL"
+                        value={config.modelApiUrl}
+                        onChange={(value) => updateConfig("modelApiUrl", value)}
+                        placeholder="https://api.openai.com/v1"
+                      />
+                      <SettingsField
+                        label="模型"
+                        value={config.model}
+                        onChange={(value) => updateConfig("model", value)}
+                        placeholder="deepseek-v4-flash"
+                      />
+                      <SettingsField
+                        label="API Key"
+                        value={config.apiKey}
+                        onChange={(value) => updateConfig("apiKey", value)}
+                        placeholder={IS_DESKTOP_MODE && saved ? "已保存，留空则保留" : "sk-..."}
+                        type="password"
+                      />
+                      {settingsError ? (
+                        <p className="rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm font-medium text-[var(--danger)]">
+                          {settingsError}
+                        </p>
+                      ) : null}
+                      <Button type="button" variant="primary" className="w-full justify-center" onClick={() => void saveConfig()}>
+                        <CheckCircle2 size={15} aria-hidden="true" />
+                        {saved ? "已保存" : "保存配置"}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  {IS_DESKTOP_MODE ? (
+                    <DesktopEmbeddingModelCard
+                      models={embeddingModels}
+                      busy={embeddingBusy}
+                      notice={embeddingNotice}
+                      onAction={runEmbeddingAction}
+                      onRefresh={refreshEmbeddingModels}
                     />
-                    <SettingsField
-                      label="模型 API URL"
-                      value={config.modelApiUrl}
-                      onChange={(value) => updateConfig("modelApiUrl", value)}
-                      placeholder="https://api.openai.com/v1"
-                    />
-                    <SettingsField
-                      label="模型"
-                      value={config.model}
-                      onChange={(value) => updateConfig("model", value)}
-                      placeholder="deepseek-v4-flash"
-                    />
-                    <SettingsField
-                      label="API Key"
-                      value={config.apiKey}
-                      onChange={(value) => updateConfig("apiKey", value)}
-                      placeholder={IS_DESKTOP_MODE && saved ? "已保存，留空则保留" : "sk-..."}
-                      type="password"
-                    />
-                    {settingsError ? (
-                      <p className="rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm font-medium text-[var(--danger)]">
-                        {settingsError}
-                      </p>
-                    ) : null}
-                    <Button type="button" variant="primary" className="w-full justify-center" onClick={() => void saveConfig()}>
-                      <CheckCircle2 size={15} aria-hidden="true" />
-                      {saved ? "已保存" : "保存配置"}
-                    </Button>
-                  </CardContent>
-                </Card>
+                  ) : null}
+                </div>
               ) : (
                 <Card className="mx-auto min-h-0 max-w-[620px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
                   <CardHeader>
@@ -2540,6 +2617,110 @@ function ConnectivityCard({
   );
 }
 
+function DesktopEmbeddingModelCard({
+  models,
+  busy,
+  notice,
+  onAction,
+  onRefresh,
+}: {
+  models: DesktopEmbeddingModelsResponse | null;
+  busy: string | null;
+  notice: string;
+  onAction: (action: "download" | "activate" | "disable", modelKey: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+}) {
+  const availableModels = models?.models ?? [];
+  const activeModel = availableModels.find((model) => model.enabled);
+  const defaultModel = availableModels.find((model) => model.key === models?.default_model_key) ?? availableModels[0];
+  const actionBusy = Boolean(busy);
+
+  return (
+    <Card className="mx-auto mt-4 min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">本地嵌入模型</h3>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {activeModel ? `${activeModel.label} 已启用` : "默认使用轻量检索"}
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => void onRefresh()} title="刷新模型状态">
+            <RefreshCw size={14} aria-hidden="true" />
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {availableModels.length === 0 ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-muted)] px-3 py-3 text-sm text-[var(--muted)]">
+            正在读取本地模型状态。
+          </div>
+        ) : (
+          availableModels.map((model) => {
+            const isDefault = model.key === defaultModel?.key;
+            const isBusy = busy?.endsWith(`:${model.key}`) ?? false;
+            return (
+              <div key={model.key} className="rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold">{model.label}</p>
+                      {isDefault ? (
+                        <span className="rounded-full bg-[var(--accent-tint)] px-2 py-0.5 text-[11px] font-semibold text-[var(--accent-strong)]">
+                          默认
+                        </span>
+                      ) : null}
+                      {model.enabled ? (
+                        <span className="rounded-full bg-[var(--info-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--info)]">
+                          已启用
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-[var(--muted)]">{model.repo_id}</p>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      {model.downloaded ? `已下载 ${formatFileSize(model.size_bytes)}` : "未下载"} · {model.runtime_available ? "运行库可用" : "运行库未包含"}
+                    </p>
+                  </div>
+                  <Database size={18} className={model.enabled ? "text-[var(--accent)]" : "text-[var(--muted)]"} aria-hidden="true" />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="justify-center"
+                    disabled={actionBusy}
+                    onClick={() => void onAction(model.downloaded ? "activate" : "download", model.key)}
+                  >
+                    {isBusy ? <Loader2 className="animate-spin" size={14} aria-hidden="true" /> : model.downloaded ? <CheckCircle2 size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}
+                    {model.downloaded ? "启用" : "下载"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="justify-center"
+                    disabled={actionBusy || !model.enabled}
+                    onClick={() => void onAction("disable", model.key)}
+                  >
+                    <Square size={14} aria-hidden="true" />
+                    轻量模式
+                  </Button>
+                </div>
+              </div>
+            );
+          })
+        )}
+        {notice ? (
+          <p className="rounded-xl border border-[var(--border)] bg-white/78 px-3 py-2 text-xs font-medium text-[var(--muted)]">
+            {notice}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ProductHeader({
   health,
   healthOk,
@@ -2575,7 +2756,7 @@ function ProductHeader({
             </span>
           </div>
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">xyfRAG 工作台</p>
+            <p className="truncate text-sm font-semibold">{PRODUCT_NAME} 工作台</p>
             <p className="truncate text-xs text-[var(--muted)]">可信知识库问答</p>
           </div>
         </div>
@@ -2588,7 +2769,7 @@ function ProductHeader({
           <Button type="button" variant="ghost" size="icon" title="帮助" className="h-8 w-8">
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
-          <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
+          <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
           {desktopMode ? (
             <div className="flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm">
               <ShieldCheck size={14} className="text-[var(--accent)]" aria-hidden="true" />
