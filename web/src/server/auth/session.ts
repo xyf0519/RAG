@@ -25,6 +25,9 @@ export type AuthResult =
   | { ok: false; response: NextResponse };
 
 export function getAuthSecret() {
+  if (process.env.XYFRAG_ENV === "production" && !process.env.AUTH_SECRET) {
+    throw new Error("AUTH_SECRET must be set when XYFRAG_ENV=production.");
+  }
   return process.env.AUTH_SECRET ?? "xyfrag-dev-auth-secret-change-me";
 }
 

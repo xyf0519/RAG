@@ -168,6 +168,14 @@ docker compose -f docker-compose.intranet.yml up --build -d
 
 `docker-compose.intranet.yml` 只暴露 Nginx 的 `80/443`，FastAPI 只在 Docker 内网中被 Next.js BFF 调用。生产环境需要配置 `AUTH_SECRET`、`INTERNAL_API_KEY`、`SMTP_*`、`ADMIN_EMAILS`，并持久化备份 `data/`、`models/`、`logs/`。
 
+阿里云 ECS 上线分支请使用：
+
+```bash
+docker compose --env-file .env.production -f docker-compose.aliyun.yml up -d --build
+```
+
+部署细节见 [Aliyun ECS Web 部署说明](docs/ALIYUN_ECS_DEPLOY.md)。
+
 ## 目录地图
 
 ```text

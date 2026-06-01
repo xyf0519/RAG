@@ -41,6 +41,33 @@ from xyfrag.session import InMemorySessionStore
 logger = logging.getLogger(__name__)
 
 
+def _is_production() -> bool:
+    return os.getenv("XYFRAG_ENV", "").lower() in {"prod", "production"}
+
+
+def _require_production_env() -> None:
+    """Fail fast when a public deployment is missing required secrets."""
+
+    if not _is_production():
+        return
+
+    required = {
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+        "INTERNAL_API_KEY": os.getenv("INTERNAL_API_KEY"),
+        "ALLOWED_EMAIL_DOMAIN": os.getenv("ALLOWED_EMAIL_DOMAIN"),
+        "ADMIN_EMAILS": os.getenv("ADMIN_EMAILS"),
+        "SMTP_HOST": os.getenv("SMTP_HOST"),
+        "SMTP_USER": os.getenv("SMTP_USER"),
+        "SMTP_PASSWORD": os.getenv("SMTP_PASSWORD"),
+        "SMTP_FROM": os.getenv("SMTP_FROM") or os.getenv("SMTP_USER"),
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(f"Production environment missing required settings: {', '.join(missing)}")
+    if os.getenv("AUTH_DEV_CODE"):
+        raise RuntimeError("AUTH_DEV_CODE must not be set when XYFRAG_ENV=production.")
+
+
 def verify_internal_api_key(
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ) -> None:
@@ -303,6 +330,7 @@ async def lifespan(app: FastAPI) -> Any:
         None.
     """
 
+    _require_production_env()
     settings = get_settings()
     configure_logging(settings)
     app.state.sessions = InMemorySessionStore()
