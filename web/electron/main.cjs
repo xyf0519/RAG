@@ -7,6 +7,8 @@ const { spawn } = require("node:child_process");
 const BACKEND_PORT = Number(process.env.XYFRAG_DESKTOP_BACKEND_PORT || 8765);
 const FRONTEND_PORT = Number(process.env.XYFRAG_DESKTOP_FRONTEND_PORT || 3765);
 
+app.setName("xyfRAG");
+
 let backendProcess = null;
 let frontendProcess = null;
 let mainWindow = null;
@@ -34,6 +36,12 @@ function getUserDataRoot() {
     fs.mkdirSync(path.join(root, child), { recursive: true });
   }
   return root;
+}
+
+function getDesktopLogPath() {
+  const root = path.join(app.getPath("userData"), "rag-data", "logs");
+  fs.mkdirSync(root, { recursive: true });
+  return path.join(root, "desktop-processes.log");
 }
 
 function copyDirectoryIfEmpty(source, target) {
@@ -83,9 +91,12 @@ function isBundledBackend(command) {
 }
 
 function spawnLogged(command, args, options) {
+  const stdio = app.isPackaged
+    ? ["ignore", fs.openSync(getDesktopLogPath(), "a"), fs.openSync(getDesktopLogPath(), "a")]
+    : "inherit";
   const child = spawn(command, args, {
     ...options,
-    stdio: app.isPackaged ? "ignore" : "inherit",
+    stdio,
     windowsHide: true,
   });
   child.on("exit", (code) => {
@@ -135,7 +146,10 @@ async function startBackend() {
     ...process.env,
     APP_MODE: "desktop",
     XYFRAG_DESKTOP: "1",
+    XYFRAG_BOUNDARY_ENABLED: "0",
+    XYFRAG_RETRIEVAL_USE_LOCAL_MODELS: "0",
     PYTHONPATH: path.join(repoRoot, "src"),
+    XYFRAG_PROJECT_ROOT: repoRoot,
     XYFRAG_DATA_DIR: path.join(dataRoot, "data"),
     XYFRAG_MODELS_DIR: path.join(dataRoot, "models"),
     XYFRAG_LOGS_DIR: path.join(dataRoot, "logs"),
@@ -144,11 +158,22 @@ async function startBackend() {
 
   const backendCommand = pickPython();
   const backendArgs = isBundledBackend(backendCommand)
-    ? ["--host", "127.0.0.1", "--port", String(BACKEND_PORT)]
+    ? [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(BACKEND_PORT),
+        "--data-dir",
+        path.join(dataRoot, "data"),
+        "--models-dir",
+        path.join(dataRoot, "models"),
+        "--logs-dir",
+        path.join(dataRoot, "logs"),
+      ]
     : ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)];
 
   backendProcess = spawnLogged(backendCommand, backendArgs, { cwd: repoRoot, env });
-  await waitForPort(BACKEND_PORT);
+  await waitForPort(BACKEND_PORT, "127.0.0.1", 180_000);
 }
 
 async function startFrontend() {
@@ -171,10 +196,64 @@ async function startFrontend() {
     [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(FRONTEND_PORT)],
     { cwd: webRoot, env: { ...env, ELECTRON_RUN_AS_NODE: "1" } },
   );
-  await waitForPort(FRONTEND_PORT);
+  await waitForPort(FRONTEND_PORT, "127.0.0.1", 120_000);
 }
 
-async function createWindow() {
+function loadingHtml(message) {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: grid;
+        place-items: center;
+        background: #f7f9f8;
+        color: #17201c;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main { width: min(440px, calc(100vw - 48px)); }
+      h1 { margin: 0 0 10px; font-size: 26px; font-weight: 720; letter-spacing: 0; }
+      p { margin: 0; color: #66736d; font-size: 15px; line-height: 1.6; }
+      .bar { height: 4px; margin-top: 24px; overflow: hidden; border-radius: 999px; background: #dfe7e2; }
+      .bar::before {
+        content: "";
+        display: block;
+        width: 38%;
+        height: 100%;
+        border-radius: inherit;
+        background: #188756;
+        animation: move 1.2s ease-in-out infinite;
+      }
+      @keyframes move {
+        0% { transform: translateX(-105%); }
+        100% { transform: translateX(275%); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>xyfRAG</h1>
+      <p>${message}</p>
+      <div class="bar" aria-hidden="true"></div>
+    </main>
+  </body>
+</html>`;
+}
+
+async function showLoading(message) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  await mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml(message))}`);
+}
+
+async function createWindow(message = "正在初始化本机资料库，马上进入工作台。") {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await showLoading(message);
+    return;
+  }
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -193,15 +272,21 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  await mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`);
+  await showLoading(message);
 }
 
 async function boot() {
   try {
-    await startBackend();
-    await startFrontend();
     await createWindow();
+    await showLoading("正在启动本地 RAG 后端，首次启动会自动准备默认资料库。");
+    await startBackend();
+    await showLoading("正在打开工作台。");
+    await startFrontend();
+    await mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`);
   } catch (error) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await showLoading("启动失败，请查看本机日志后重试。");
+    }
     dialog.showErrorBox("xyfRAG 启动失败", error instanceof Error ? error.message : String(error));
     app.quit();
   }
@@ -230,6 +315,6 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    void createWindow();
+    void boot();
   }
 });
