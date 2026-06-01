@@ -7,6 +7,7 @@ import json
 import shutil
 import sqlite3
 import time
+from importlib import import_module
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -484,10 +485,14 @@ class KnowledgeBaseStore:
             texts = [item.text for item in items]
             y = [item.label for item in items]
 
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.neural_network import MLPClassifier
-            from sklearn.pipeline import Pipeline
-            import joblib
+            TfidfVectorizer = import_module(
+                "sklearn.feature_extraction.text"
+            ).TfidfVectorizer
+            MLPClassifier = import_module(
+                "sklearn.neural_network"
+            ).MLPClassifier
+            Pipeline = import_module("sklearn.pipeline").Pipeline
+            joblib = import_module("joblib")
 
             pipeline = Pipeline(
                 [

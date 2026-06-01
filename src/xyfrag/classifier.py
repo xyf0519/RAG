@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from importlib import import_module
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -59,7 +60,7 @@ class BoundaryClassifier:
             return
 
         try:
-            import joblib
+            joblib = import_module("joblib")
         except ModuleNotFoundError as exc:
             logger.error("joblib is required to load the boundary classifier: %s", exc)
             return

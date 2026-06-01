@@ -11,7 +11,9 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(
+    os.getenv("XYFRAG_PROJECT_ROOT") or Path(__file__).resolve().parents[2]
+).resolve()
 
 
 class AppConfig(BaseModel):
@@ -187,6 +189,31 @@ def _apply_env_path_overrides(settings: Settings) -> Settings:
     return settings
 
 
+def _env_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _apply_env_runtime_overrides(settings: Settings) -> Settings:
+    """Apply runtime feature toggles used by packaged desktop mode."""
+
+    boundary_enabled = _env_bool(os.getenv("XYFRAG_BOUNDARY_ENABLED"))
+    if boundary_enabled is not None:
+        settings.boundary_classifier.enabled = boundary_enabled
+
+    use_local_models = _env_bool(os.getenv("XYFRAG_RETRIEVAL_USE_LOCAL_MODELS"))
+    if use_local_models is not None:
+        settings.retrieval.use_local_models = use_local_models
+
+    return settings
+
+
 @lru_cache(maxsize=1)
 def get_settings(config_path: str = "config/settings.yaml") -> Settings:
     """Load settings from YAML and environment variables.
@@ -209,7 +236,11 @@ def get_settings(config_path: str = "config/settings.yaml") -> Settings:
     load_dotenv(PROJECT_ROOT.parent / ".env")
     load_dotenv(PROJECT_ROOT / ".env", override=True)
     data = _read_yaml(config_file)
-    settings = _resolve_settings_paths(_apply_env_path_overrides(Settings.model_validate(data)))
+    settings = _resolve_settings_paths(
+        _apply_env_runtime_overrides(
+            _apply_env_path_overrides(Settings.model_validate(data))
+        )
+    )
 
     for path in (
         settings.paths.raw_docs_dir,
