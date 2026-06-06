@@ -26,7 +26,7 @@ describe("ChatWorkspace", () => {
           });
         }
         if (url.includes("/api/health")) {
-          return jsonResponse({ ok: true, backend: { ok: true, app: "xyfRAG" } });
+          return jsonResponse({ ok: true, backend: { ok: true, app: "Maverella" } });
         }
         if (url.endsWith("/api/admin/users")) {
           return jsonResponse({
@@ -194,7 +194,7 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    expect((await screen.findAllByRole("heading", { name: "xyfRAG" })).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole("heading", { name: "Maverella" })).length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText("输入校园资料库相关问题...")).toBeInTheDocument();
     expect(screen.getByText("有什么需要查询？")).toBeInTheDocument();
     expect(screen.queryByText("挂科后什么时候申请补考？")).not.toBeInTheDocument();

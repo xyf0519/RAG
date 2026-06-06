@@ -1,4 +1,4 @@
-"""FastAPI backend for xyfRAG."""
+"""FastAPI backend for Maverella."""
 
 from __future__ import annotations
 
@@ -316,7 +316,7 @@ async def lifespan(app: FastAPI) -> Any:
     yield
 
 
-app = FastAPI(title="xyfRAG", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Maverella", version="0.1.0", lifespan=lifespan)
 InternalAuth = Annotated[None, Depends(verify_internal_api_key)]
 
 

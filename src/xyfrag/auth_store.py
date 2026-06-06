@@ -12,6 +12,7 @@ import smtplib
 import time
 from dataclasses import dataclass
 from email.message import EmailMessage
+from collections.abc import Iterable
 from pathlib import Path
 from threading import RLock
 import sqlite3
@@ -42,11 +43,11 @@ class AuthStore:
     def __init__(
         self,
         db_path: Path,
-        allowed_domain: str = "zju.edu.cn",
+        allowed_domain: str | Iterable[str] = "zju.edu.cn",
         admin_emails: set[str] | None = None,
     ) -> None:
         self._db_path = db_path
-        self._allowed_domain = allowed_domain.lower().lstrip("@")
+        self._allowed_domains = self._normalize_domains(allowed_domain)
         self._admin_emails = {email.lower() for email in (admin_emails or set())}
         self._lock = RLock()
         self._connect().close()
@@ -311,12 +312,22 @@ class AuthStore:
         return self.normalize_email(email) in self._admin_emails
 
     def require_allowed_email(self, email: str) -> None:
-        if not email.endswith(f"@{self._allowed_domain}"):
-            raise AuthError(f"仅支持 @{self._allowed_domain} 邮箱。")
+        if not any(email.endswith(f"@{domain}") for domain in self._allowed_domains):
+            allowed = "、".join(f"@{domain}" for domain in sorted(self._allowed_domains))
+            raise AuthError(f"仅支持 {allowed} 邮箱。")
 
     @staticmethod
     def normalize_email(email: str) -> str:
         return email.strip().lower()
+
+    @staticmethod
+    def _normalize_domains(domains: str | Iterable[str]) -> set[str]:
+        if isinstance(domains, str):
+            raw_items = domains.replace(";", ",").split(",")
+        else:
+            raw_items = list(domains)
+        normalized = {item.strip().lower().lstrip("@") for item in raw_items if item.strip()}
+        return normalized or {"zju.edu.cn"}
 
     def _get_user_row_by_email(self, email: str) -> sqlite3.Row | None:
         with self._lock, self._connect() as connection:
@@ -390,8 +401,9 @@ def admin_emails_from_env() -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
-def allowed_domain_from_env() -> str:
-    return os.getenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn").lower().lstrip("@")
+def allowed_domain_from_env() -> set[str]:
+    raw = os.getenv("ALLOWED_EMAIL_DOMAINS") or os.getenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn")
+    return AuthStore._normalize_domains(raw)
 
 
 def send_email_code(email: str, code: str, purpose: str) -> None:

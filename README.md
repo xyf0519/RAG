@@ -93,13 +93,13 @@ npm run dev
 ```bash
 # 开发环境可使用固定验证码，生产环境请删除 AUTH_DEV_CODE 并配置 SMTP。
 AUTH_DEV_CODE=123456
-ALLOWED_EMAIL_DOMAIN=zju.edu.cn
+ALLOWED_EMAIL_DOMAINS=zju.edu.cn,qq.com
 ADMIN_EMAILS=admin@zju.edu.cn
 AUTH_SECRET=请替换为长随机字符串
 INTERNAL_API_KEY=请替换为长随机字符串
 ```
 
-工作台只允许 `@zju.edu.cn` 邮箱注册。注册和找回密码都会发送邮箱验证码；开发环境设置 `AUTH_DEV_CODE` 后，可直接使用固定验证码。
+工作台只允许 `ALLOWED_EMAIL_DOMAINS` 中的邮箱注册，多个域名用英文逗号分隔；兼容旧配置 `ALLOWED_EMAIL_DOMAIN=zju.edu.cn`。注册和找回密码都会发送邮箱验证码；开发环境设置 `AUTH_DEV_CODE` 后，可直接使用固定验证码。
 
 生产发信需配置 SMTP，例如：
 
@@ -110,6 +110,17 @@ SMTP_SECURITY=ssl
 SMTP_USER=你的浙大邮箱账号
 SMTP_PASSWORD=你的邮箱密码或客户端授权码
 SMTP_FROM=你的浙大邮箱账号
+```
+
+QQ 邮箱可改为：
+
+```bash
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=465
+SMTP_SECURITY=ssl
+SMTP_USER=3604405569@qq.com
+SMTP_PASSWORD=你的 QQ 邮箱 SMTP 授权码
+SMTP_FROM=3604405569@qq.com
 ```
 
 填好后可用 `PYTHONPATH=src .venv/bin/python3 scripts/send_test_email_code.py 3240105114@zju.edu.cn` 验证是否能收到邮件。

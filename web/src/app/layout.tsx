@@ -5,8 +5,12 @@ import { AuthProvider } from "@/features/auth/auth-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "xyfRAG",
+  title: "Maverella",
   description: "Campus RAG assistant with grounded citations.",
+  icons: {
+    icon: "/images/icon.png",
+    apple: "/images/icon.png",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

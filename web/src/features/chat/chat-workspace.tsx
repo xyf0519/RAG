@@ -3,7 +3,6 @@
 import {
   Activity,
   Archive,
-  BookOpenText,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -94,6 +93,7 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
+const PRODUCT_NAME = "Maverella";
 
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
@@ -425,7 +425,7 @@ function ChatWorkspaceView({
           <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="truncate text-sm font-semibold">xyfRAG</h1>
+                <h1 className="truncate text-sm font-semibold">{PRODUCT_NAME}</h1>
                 <StatusBadge status={chat.status} />
               </div>
               <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
@@ -1886,7 +1886,7 @@ function ProductSidebar({
               title="展开侧栏"
             >
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
-                <BookOpenText size={22} aria-hidden="true" />
+                <Image src="/images/icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-xl object-cover" aria-hidden="true" />
               </span>
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
                 <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
@@ -1895,11 +1895,9 @@ function ProductSidebar({
             </button>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
-                <BookOpenText size={20} aria-hidden="true" />
-              </div>
+              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">xyfRAG</h2>
+                <h2 className="truncate text-base font-semibold">{PRODUCT_NAME}</h2>
                 <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
               </div>
             </div>
@@ -2465,7 +2463,7 @@ function ProductHeader({
             </span>
           </div>
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">xyfRAG 工作台</p>
+            <p className="truncate text-sm font-semibold">{PRODUCT_NAME} 工作台</p>
             <p className="truncate text-xs text-[var(--muted)]">可信知识库问答</p>
           </div>
         </div>
@@ -2478,7 +2476,7 @@ function ProductHeader({
           <Button type="button" variant="ghost" size="icon" title="帮助" className="h-8 w-8">
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
-          <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
+          <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
           <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>

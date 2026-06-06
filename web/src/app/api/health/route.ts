@@ -9,14 +9,14 @@ export async function GET() {
     const backend = await proxyBackendHealth();
     return NextResponse.json({
       ok: true,
-      app: "xyfRAG web",
+      app: "Maverella web",
       backend,
     });
   } catch (error) {
     return NextResponse.json(
       {
         ok: false,
-        app: "xyfRAG web",
+        app: "Maverella web",
         backend: null,
         error: error instanceof Error ? error.message : "Backend unavailable",
       },

@@ -19,7 +19,7 @@ describe("LoginScreen", () => {
       </AuthProvider>,
     );
 
-    expect(screen.getByRole("heading", { name: "xyfRAG" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Maverella" })).toBeInTheDocument();
     expect(screen.getByText("浙大邮箱登录")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "注册" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "忘记密码" })).toBeInTheDocument();

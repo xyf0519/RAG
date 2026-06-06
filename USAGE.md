@@ -26,7 +26,7 @@ OPENAI_BASE_URL=https://api.deepseek.com
 ```bash
 AUTH_SECRET=请替换为长随机字符串
 INTERNAL_API_KEY=请替换为长随机字符串
-ALLOWED_EMAIL_DOMAIN=zju.edu.cn
+ALLOWED_EMAIL_DOMAINS=zju.edu.cn,qq.com
 ADMIN_EMAILS=admin@zju.edu.cn
 
 # 开发环境可使用固定验证码，生产环境请删除。
@@ -41,7 +41,18 @@ SMTP_PASSWORD=你的邮箱密码或客户端授权码
 SMTP_FROM=你的浙大邮箱账号
 ```
 
-所有新用户必须使用 `@zju.edu.cn` 邮箱并完成验证码校验后才能注册。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。
+所有新用户必须使用 `ALLOWED_EMAIL_DOMAINS` 中的邮箱并完成验证码校验后才能注册，多个域名用英文逗号分隔；旧配置 `ALLOWED_EMAIL_DOMAIN=zju.edu.cn` 仍然可用。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。
+
+使用 QQ 邮箱发送验证码时可配置：
+
+```bash
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=465
+SMTP_SECURITY=ssl
+SMTP_USER=3604405569@qq.com
+SMTP_PASSWORD=你的 QQ 邮箱 SMTP 授权码
+SMTP_FROM=3604405569@qq.com
+```
 
 如果你的邮箱服务要求 STARTTLS，可改成：
 

@@ -177,6 +177,20 @@ def test_admin_email_gets_admin_role() -> None:
     assert response.json()["user"]["role"] == "admin"
 
 
+def test_multiple_allowed_email_domains(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "zju.edu.cn, qq.com")
+
+    with TestClient(app) as client:
+        rejected = client.post("/api/v1/auth/register/start", json={"email": "user@example.com"})
+        assert rejected.status_code == 400
+
+        zju_start = client.post("/api/v1/auth/register/start", json={"email": "student@zju.edu.cn"})
+        assert zju_start.status_code == 200
+
+        qq_start = client.post("/api/v1/auth/register/start", json={"email": "3604405569@qq.com"})
+        assert qq_start.status_code == 200
+
+
 def test_admin_can_list_users_and_assign_roles() -> None:
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
