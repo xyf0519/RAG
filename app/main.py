@@ -689,6 +689,24 @@ async def upload_documents(
     return documents
 
 
+@app.delete(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}",
+    response_model=KnowledgeBaseResponse,
+)
+async def delete_document(
+    knowledge_base_id: str,
+    document_id: str,
+    _internal: InternalAuth,
+) -> KnowledgeBaseResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        knowledge_base = store.delete_document(knowledge_base_id, document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文档不存在。") from exc
+    _invalidate_service(app, knowledge_base_id)
+    return _kb_response(knowledge_base)
+
+
 @app.post(
     "/api/v1/knowledge-bases/{knowledge_base_id}/index-jobs",
     response_model=IndexJobResponse,

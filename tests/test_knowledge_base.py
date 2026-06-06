@@ -56,6 +56,50 @@ def test_store_crud_upload_and_index_job(tmp_path: Path) -> None:
     assert store.settings_for(knowledge_base.id).paths.raw_docs_dir == store.raw_dir(knowledge_base.id)
 
 
+def test_store_deletes_document_and_invalidates_index(tmp_path: Path) -> None:
+    store = KnowledgeBaseStore(make_settings(tmp_path))
+    knowledge_base = store.create_knowledge_base("规章制度")
+    document = store.add_document(
+        knowledge_base.id,
+        "rules.md",
+        "# 规章制度\n请遵守校园管理规定。\n".encode(),
+    )
+    job = store.create_index_job(knowledge_base.id)
+    assert job.status == "succeeded"
+    assert (store.raw_dir(knowledge_base.id) / "rules.md").exists()
+    assert (store.index_dir(knowledge_base.id) / "chunks.json").exists()
+
+    updated = store.delete_document(knowledge_base.id, document.id)
+
+    assert updated.document_count == 0
+    assert updated.index_status == "not_indexed"
+    assert store.list_documents(knowledge_base.id) == []
+    assert not (store.raw_dir(knowledge_base.id) / "rules.md").exists()
+    assert not (store.index_dir(knowledge_base.id) / "chunks.json").exists()
+    assert not (store.index_dir(knowledge_base.id) / "embeddings.npy").exists()
+    with pytest.raises(FileNotFoundError):
+        store.load_index(knowledge_base.id)
+
+
+def test_store_keeps_deleted_legacy_document_deleted(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.paths.raw_docs_dir.mkdir(parents=True)
+    settings.paths.index_dir.mkdir(parents=True)
+    (settings.paths.raw_docs_dir / "legacy.md").write_text("# 校园卡\n挂失后补办。\n", encoding="utf-8")
+    (settings.paths.index_dir / "chunks.json").write_text("[]", encoding="utf-8")
+    (settings.paths.index_dir / "embeddings.npy").write_bytes(b"placeholder")
+    store = KnowledgeBaseStore(settings)
+    document = store.list_documents(DEFAULT_KNOWLEDGE_BASE_ID)[0]
+
+    updated = store.delete_document(DEFAULT_KNOWLEDGE_BASE_ID, document.id)
+    restarted = KnowledgeBaseStore(settings)
+
+    assert updated.document_count == 0
+    assert restarted.list_documents(DEFAULT_KNOWLEDGE_BASE_ID) == []
+    assert not (restarted.raw_dir(DEFAULT_KNOWLEDGE_BASE_ID) / "legacy.md").exists()
+    assert not (restarted.index_dir(DEFAULT_KNOWLEDGE_BASE_ID) / "chunks.json").exists()
+
+
 def test_store_boundary_items_crud(tmp_path: Path) -> None:
     store = KnowledgeBaseStore(make_settings(tmp_path))
     knowledge_base = store.create_knowledge_base("边界样本库", "边界训练")

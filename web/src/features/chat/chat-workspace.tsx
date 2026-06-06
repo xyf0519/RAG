@@ -34,6 +34,7 @@ import {
   Star,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   UploadCloud,
   UserCog,
   Users,
@@ -550,10 +551,10 @@ function KnowledgeAddWorkspace({
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const visibleKnowledgeBases = knowledgeBases.slice(0, 5);
-  const visibleDocuments = documents.slice(0, 4);
   const selectedClassifierModel =
     classifierModels.find((model) => model.id === selectedClassifierModelId) ?? classifierModels[0] ?? null;
   const selectedClassifierMetrics = parseClassifierModelMetrics(selectedClassifierModel?.metrics_json);
@@ -656,6 +657,36 @@ function KnowledgeAddWorkspace({
       onNotice(error instanceof Error ? error.message : "文档上传失败。");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function deleteDocument(document: KnowledgeDocument) {
+    if (deletingDocumentId) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除「${document.title}」吗？删除后需要重新构建索引。`);
+    if (!confirmed) {
+      return;
+    }
+    setDeletingDocumentId(document.id);
+    try {
+      const response = await fetch(
+        `/api/knowledge-bases/${encodeURIComponent(selectedKnowledgeBase.id)}/documents/${encodeURIComponent(document.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "文档删除失败。"));
+      }
+      setDocuments((current) => current.filter((item) => item.id !== document.id));
+      onNotice("文档已删除，请重新构建索引。");
+      await onRefresh();
+      await refreshDocuments();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "文档删除失败。");
+    } finally {
+      setDeletingDocumentId("");
     }
   }
 
@@ -834,18 +865,18 @@ function KnowledgeAddWorkspace({
                 </div>
               </div>
 
-              <div className="min-h-0 overflow-hidden pr-1">
+              <div className="min-h-0 overflow-y-auto pr-1">
                 <div className="space-y-2">
-                  {documents.length ? visibleDocuments.map((document) => (
-                    <CompactDocumentRow key={document.id} document={document} />
+                  {documents.length ? documents.map((document) => (
+                    <CompactDocumentRow
+                      key={document.id}
+                      document={document}
+                      deleting={deletingDocumentId === document.id}
+                      onDelete={() => void deleteDocument(document)}
+                    />
                   )) : (
                     <PanelEmpty icon={UploadCloud} title="等待资料" description="上传后即可构建索引。" />
                   )}
-                  {documents.length > visibleDocuments.length ? (
-                    <p className="px-1 text-xs text-[var(--muted)]">
-                      还有 {documents.length - visibleDocuments.length} 个文档
-                    </p>
-                  ) : null}
                 </div>
               </div>
             </CardContent>
@@ -2534,10 +2565,18 @@ function VisualHero({
   );
 }
 
-function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
+function CompactDocumentRow({
+  document,
+  deleting = false,
+  onDelete,
+}: {
+  document: KnowledgeDocument;
+  deleting?: boolean;
+  onDelete?: () => void;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-white px-3 py-2.5 shadow-sm">
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
           <FileText size={16} aria-hidden="true" />
         </div>
@@ -2548,7 +2587,27 @@ function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
           </p>
         </div>
       </div>
-      <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+      <div className="flex shrink-0 items-center gap-2">
+        <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+        {onDelete ? (
+          <Button
+            type="button"
+            variant="danger"
+            size="icon"
+            className="h-8 w-8"
+            onClick={onDelete}
+            disabled={deleting}
+            title={`删除 ${document.title}`}
+            aria-label={`删除 ${document.title}`}
+          >
+            {deleting ? (
+              <Loader2 className="animate-spin" size={14} aria-hidden="true" />
+            ) : (
+              <Trash2 size={14} aria-hidden="true" />
+            )}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
