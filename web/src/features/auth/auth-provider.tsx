@@ -2,6 +2,7 @@
 
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
+import { mapAuthUser, type BackendAuthUser } from "@/shared/lib/auth-user";
 import type { AuthSession, AuthUser } from "@/shared/types/auth";
 
 type AuthContextValue = {
@@ -23,8 +24,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshSession = useCallback(async () => {
     try {
       const response = await fetch("/api/auth/session", { cache: "no-store" });
-      const data = (await response.json()) as { user?: AuthUser | null };
-      setSession(data.user ? { user: data.user, issuedAt: Date.now() } : null);
+      const data = (await response.json()) as { user?: BackendAuthUser | null };
+      setSession(data.user ? { user: mapAuthUser(data.user), issuedAt: Date.now() } : null);
     } catch {
       setSession(null);
     } finally {
@@ -37,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshSession]);
 
   const setAuthenticatedUser = useCallback((user: AuthUser) => {
-    setSession({ user, issuedAt: Date.now() });
+    setSession({ user: mapAuthUser(user), issuedAt: Date.now() });
     setReady(true);
   }, []);
 

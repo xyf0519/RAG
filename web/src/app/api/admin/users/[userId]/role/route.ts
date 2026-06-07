@@ -2,22 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdmin } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
-import type { AuthUser, UserRole } from "@/shared/types/auth";
-
-type BackendUser = {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  email_verified_at?: number | null;
-  created_at?: number | null;
-  last_login_at?: number | null;
-  disabled_at?: number | null;
-  core_admin?: boolean;
-};
+import { mapAuthUser, type BackendAuthUser } from "@/shared/lib/auth-user";
+import type { UserRole } from "@/shared/types/auth";
 
 type BackendAuthResponse = {
-  user?: BackendUser | null;
+  user?: BackendAuthUser | null;
   message?: string;
 };
 
@@ -57,21 +46,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
   return NextResponse.json({
     ok: true,
-    user: data.user ? mapUser(data.user) : null,
+    user: data.user ? mapAuthUser(data.user) : null,
     message: data.message ?? "权限已更新。",
   });
-}
-
-function mapUser(user: BackendUser): AuthUser {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    emailVerifiedAt: user.email_verified_at ?? null,
-    createdAt: user.created_at ?? null,
-    lastLoginAt: user.last_login_at ?? null,
-    disabledAt: user.disabled_at ?? null,
-    coreAdmin: Boolean(user.core_admin),
-  };
 }
