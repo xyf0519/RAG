@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+      args:
+        BACKEND_BASE_IMAGE: ${BACKEND_BASE_IMAGE:-rag-backend-base:latest}
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -13,6 +15,8 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:24-slim}
     environment:
       RAG_BACKEND_URL: http://backend:8000
     depends_on:

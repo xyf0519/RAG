@@ -180,7 +180,7 @@ models/huggingface/bge-small-zh-v1.5/
 
 ```yaml
 retrieval:
-  embedding_backend: bge
+  embedding_backend: sentence_transformer
   embedding_model: models/huggingface/bge-small-zh-v1.5
   reranker_backend: lexical
   reranker_model: ""
@@ -262,7 +262,7 @@ PY
 
 ```yaml
 retrieval:
-  embedding_backend: bge
+  embedding_backend: sentence_transformer
   embedding_model: models/huggingface/bge-m3
   use_local_models: true
 ```
@@ -465,6 +465,7 @@ npm run dev
 项目提供 demo compose：
 
 ```bash
+docker compose -f docker-compose.backend-base.yml build backend-base
 docker compose -f docker-compose.demo.yml up --build
 ```
 

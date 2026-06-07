@@ -1,10 +1,12 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.main as api
 from app.main import app
+from xyfrag.auth_store import AuthStore, build_email_code_message
 from xyfrag.config import (
     AppConfig,
     BoundaryClassifierConfig,
@@ -14,6 +16,9 @@ from xyfrag.config import (
     RetrievalConfig,
     Settings,
 )
+
+
+TEST_OPS_DB: Path
 
 
 @pytest.fixture(autouse=True)
@@ -51,10 +56,49 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         frontend=FrontendConfig(),
     )
 
+    global TEST_OPS_DB
+    TEST_OPS_DB = settings.paths.ops_db
     monkeypatch.setattr(api, "get_settings", lambda: settings)
-    monkeypatch.setenv("AUTH_DEV_CODE", "123456")
+    monkeypatch.delenv("AUTH_DEV_CODE", raising=False)
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn")
     monkeypatch.setenv("ADMIN_EMAILS", "admin@zju.edu.cn")
+
+
+def latest_email_code(email: str, purpose: str) -> str:
+    normalized_email = email.strip().lower()
+    with sqlite3.connect(TEST_OPS_DB) as connection:
+        row = connection.execute(
+            """
+            SELECT code_hash FROM email_codes
+            WHERE email = ? AND purpose = ? AND consumed_at IS NULL
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (normalized_email, purpose),
+        ).fetchone()
+    assert row is not None
+    stored_hash = str(row[0])
+    for value in range(1_000_000):
+        candidate = f"{value:06d}"
+        if AuthStore._verify_secret(candidate, stored_hash):
+            return candidate
+    raise AssertionError("stored email code hash did not match a 6-digit code")
+
+
+def test_email_code_message_contains_html_and_text() -> None:
+    message = build_email_code_message(
+        "user@zju.edu.cn",
+        "847265",
+        "register",
+        "noreply@example.com",
+    )
+
+    assert message["Subject"] == "847265 是你的 xyfRAG 验证码"
+    assert message.get_content_type() == "multipart/alternative"
+    parts = {part.get_content_type(): part.get_content() for part in message.iter_parts()}
+    assert "847265" in parts["text/plain"]
+    assert "注册 xyfRAG 账号" in parts["text/plain"]
+    assert "847265" in parts["text/html"]
+    assert "注册 xyfRAG 账号" in parts["text/html"]
 
 
 def test_health_endpoint() -> None:
@@ -100,6 +144,9 @@ def test_email_auth_register_login_and_reset() -> None:
 
         start = client.post("/api/v1/auth/register/start", json={"email": "user@zju.edu.cn"})
         assert start.status_code == 200
+        register_code = latest_email_code("user@zju.edu.cn", "register")
+        assert register_code.isdigit()
+        assert len(register_code) == 6
 
         wrong_code = client.post(
             "/api/v1/auth/register/verify",
@@ -117,7 +164,7 @@ def test_email_auth_register_login_and_reset() -> None:
             json={
                 "email": "user@zju.edu.cn",
                 "password": "password123",
-                "code": "123456",
+                "code": register_code,
                 "name": "求是用户",
             },
         )
@@ -136,12 +183,13 @@ def test_email_auth_register_login_and_reset() -> None:
             json={"email": "user@zju.edu.cn"},
         )
         assert reset_start.status_code == 200
+        reset_code = latest_email_code("user@zju.edu.cn", "password_reset")
 
         reset_confirm = client.post(
             "/api/v1/auth/password-reset/confirm",
             json={
                 "email": "user@zju.edu.cn",
-                "code": "123456",
+                "code": reset_code,
                 "password": "password456",
             },
         )
@@ -163,12 +211,13 @@ def test_email_auth_register_login_and_reset() -> None:
 def test_admin_email_gets_admin_role() -> None:
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
+        code = latest_email_code("admin@zju.edu.cn", "register")
         response = client.post(
             "/api/v1/auth/register/verify",
             json={
                 "email": "admin@zju.edu.cn",
                 "password": "password123",
-                "code": "123456",
+                "code": code,
                 "name": "管理员",
             },
         )
@@ -180,12 +229,13 @@ def test_admin_email_gets_admin_role() -> None:
 def test_admin_can_list_users_and_assign_roles() -> None:
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
+        admin_code = latest_email_code("admin@zju.edu.cn", "register")
         admin_response = client.post(
             "/api/v1/auth/register/verify",
             json={
                 "email": "admin@zju.edu.cn",
                 "password": "password123",
-                "code": "123456",
+                "code": admin_code,
                 "name": "管理员",
             },
         )
@@ -193,12 +243,13 @@ def test_admin_can_list_users_and_assign_roles() -> None:
         admin = admin_response.json()["user"]
 
         assert client.post("/api/v1/auth/register/start", json={"email": "student@zju.edu.cn"}).status_code == 200
+        student_code = latest_email_code("student@zju.edu.cn", "register")
         user_response = client.post(
             "/api/v1/auth/register/verify",
             json={
                 "email": "student@zju.edu.cn",
                 "password": "password123",
-                "code": "123456",
+                "code": student_code,
                 "name": "学生用户",
             },
         )

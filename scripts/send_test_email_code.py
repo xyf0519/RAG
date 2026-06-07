@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import secrets
 
 from xyfrag.auth_store import AuthError, check_smtp_settings, send_email_code
 from xyfrag.config import get_settings
@@ -11,7 +12,7 @@ from xyfrag.config import get_settings
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send a test xyfRAG email verification code.")
     parser.add_argument("email", help="Recipient email address.")
-    parser.add_argument("--code", default="123456", help="Verification code to send.")
+    parser.add_argument("--code", default=f"{secrets.randbelow(1_000_000):06d}", help="Verification code to send.")
     args = parser.parse_args()
 
     get_settings()

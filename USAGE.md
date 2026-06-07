@@ -29,10 +29,7 @@ INTERNAL_API_KEY=请替换为长随机字符串
 ALLOWED_EMAIL_DOMAIN=zju.edu.cn
 ADMIN_EMAILS=admin@zju.edu.cn
 
-# 开发环境可使用固定验证码，生产环境请删除。
-AUTH_DEV_CODE=123456
-
-# 生产环境用于发送注册和重置密码验证码。
+# 用于发送注册和重置密码随机验证码。
 SMTP_HOST=smtp.zju.edu.cn
 SMTP_PORT=994
 SMTP_SECURITY=ssl
@@ -41,7 +38,7 @@ SMTP_PASSWORD=你的邮箱密码或客户端授权码
 SMTP_FROM=你的浙大邮箱账号
 ```
 
-所有新用户必须使用 `@zju.edu.cn` 邮箱并完成验证码校验后才能注册。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。
+所有新用户必须使用 `@zju.edu.cn` 邮箱并完成验证码校验后才能注册。`ADMIN_EMAILS` 中的邮箱登录后自动获得管理员权限。未配置 SMTP 的开发环境会把随机验证码打印到后端日志。
 
 如果你的邮箱服务要求 STARTTLS，可改成：
 
@@ -62,7 +59,7 @@ BGE embedding/reranker 不走 OpenAI API，不需要在 `.env` 填 BGE API Key�
 
 ```yaml
 retrieval:
-  embedding_backend: bge
+  embedding_backend: sentence_transformer
   embedding_model: models/huggingface/bge-small-zh-v1.5
   reranker_backend: lexical
   reranker_model: ""
@@ -239,12 +236,14 @@ E2E 使用 mocked BFF 响应验证桌面和移动端工作台基础体验。
 ## 7. Docker 演示
 
 ```bash
+docker compose -f docker-compose.backend-base.yml build backend-base
 docker compose -f docker-compose.demo.yml up --build
 ```
 
 内网单机部署：
 
 ```bash
+docker compose -f docker-compose.backend-base.yml build backend-base
 docker compose -f docker-compose.intranet.yml up --build -d
 ```
 
@@ -258,13 +257,13 @@ http://127.0.0.1:3000
 
 ## 8. 可选增强
 
-默认已经配置为本地 `bge-small-zh-v1.5` embedding + 轻量词面 reranker，适合本机 CPU 演示。若机器没有安装本地模型依赖，系统会自动降级到 hashing embedding 和词面 reranker，保证演示不崩。
+默认已经配置为通过 SentenceTransformers 加载本地 `bge-small-zh-v1.5` embedding + 轻量词面 reranker，适合本机 CPU 演示。若机器没有安装本地模型依赖，系统会自动降级到 hashing embedding 和词面 reranker，保证演示不崩。
 
 如果要升级到完整 BGE-M3 或 BGE reranker，把模型下载到 `models/huggingface/` 后修改：
 
 ```yaml
 retrieval:
-  embedding_backend: bge
+  embedding_backend: sentence_transformer
   embedding_model: models/huggingface/bge-m3
   reranker_backend: bge
   reranker_model: models/huggingface/bge-reranker-v2-m3

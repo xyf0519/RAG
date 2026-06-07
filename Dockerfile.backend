@@ -1,13 +1,11 @@
-FROM python:3.12-slim
+ARG BACKEND_BASE_IMAGE=rag-backend-base:latest
+FROM ${BACKEND_BASE_IMAGE}
 
 WORKDIR /app
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app app
 COPY config config
@@ -16,9 +14,6 @@ COPY models models
 COPY scripts scripts
 COPY src src
 COPY .env.example .env.example
-
-RUN PYTHONPATH=src python models/train_classifier.py \
-    && PYTHONPATH=src python scripts/build_index.py
 
 EXPOSE 8000
 

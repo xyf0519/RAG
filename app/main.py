@@ -64,9 +64,6 @@ def _require_production_env() -> None:
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"Production environment missing required settings: {', '.join(missing)}")
-    if os.getenv("AUTH_DEV_CODE"):
-        raise RuntimeError("AUTH_DEV_CODE must not be set when XYFRAG_ENV=production.")
-
 
 def verify_internal_api_key(
     x_internal_api_key: Annotated[Optional[str], Header()] = None,

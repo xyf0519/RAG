@@ -32,12 +32,14 @@
 | 边界熔断 | 超纲或闲聊问题返回固定话术，降低幻觉和成本 |
 | 混合检索 | BM25 捕捉精确词，embedding 捕捉语义相似问题 |
 | 引用追溯 | 回答绑定 `[1]` 样式来源，前端展示 chunk、score 和正文 |
-| BGE 语义检索 | 默认使用本地 `models/huggingface/bge-small-zh-v1.5` 做 embedding，CPU 演示稳定；可按需切换到 BGE-M3 或 BGE reranker |
+| BGE 语义检索 | 默认通过 SentenceTransformers 加载本地 `models/huggingface/bge-small-zh-v1.5` 做 embedding，CPU 演示稳定；可按需切换到 BGE-M3 或 BGE reranker |
 | 本地演示 | 无 LLM API Key 时启用本地抽取式回答，完整链路可跑通 |
 
 ## 快速启动
 
 第一次拉取项目、配置 API、本地 BGE 模型、边界二分类器和知识库扩充，请先看 [新手启动与扩展指南](docs/NEW_USER_GUIDE.md)。
+
+当前分支的部署文档入口见 [docs/README.md](docs/README.md)。Aliyun ECS 公开 Web App 部署请直接看 [Aliyun ECS Web 部署说明](docs/ALIYUN_ECS_DEPLOY.md)；日常改代码后的构建上线命令见 [改完代码后的构建与上线步骤](docs/CODE_DEPLOY_STEPS.md)。
 
 后端：
 
@@ -91,15 +93,13 @@ npm run dev
 登录：
 
 ```bash
-# 开发环境可使用固定验证码，生产环境请删除 AUTH_DEV_CODE 并配置 SMTP。
-AUTH_DEV_CODE=123456
 ALLOWED_EMAIL_DOMAIN=zju.edu.cn
 ADMIN_EMAILS=admin@zju.edu.cn
 AUTH_SECRET=请替换为长随机字符串
 INTERNAL_API_KEY=请替换为长随机字符串
 ```
 
-工作台只允许 `@zju.edu.cn` 邮箱注册。注册和找回密码都会发送邮箱验证码；开发环境设置 `AUTH_DEV_CODE` 后，可直接使用固定验证码。
+工作台只允许 `@zju.edu.cn` 邮箱注册。注册和找回密码都会发送随机邮箱验证码；未配置 SMTP 的开发环境会把验证码打印到后端日志。
 
 生产发信需配置 SMTP，例如：
 
@@ -157,12 +157,14 @@ npm run e2e
 一键演示：
 
 ```bash
+docker compose -f docker-compose.backend-base.yml build backend-base
 docker compose -f docker-compose.demo.yml up --build
 ```
 
 内网单机部署：
 
 ```bash
+docker compose -f docker-compose.backend-base.yml build backend-base
 docker compose -f docker-compose.intranet.yml up --build -d
 ```
 
@@ -171,10 +173,16 @@ docker compose -f docker-compose.intranet.yml up --build -d
 阿里云 ECS 上线分支请使用：
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.aliyun.yml up -d --build
+cp .env.production.example .env.production
+# 编辑 .env.production，填入 OPENAI_API_KEY、AUTH_SECRET、INTERNAL_API_KEY、ADMIN_EMAILS、SMTP_* 等
+sudo mkdir -p /opt/xyfrag/data /opt/xyfrag/models /opt/xyfrag/logs /opt/xyfrag/backups
+sudo chown -R "$USER":"$USER" /opt/xyfrag
+sudo docker compose --env-file .env.production -f docker-compose.backend-base.yml build backend-base
+sudo docker compose --env-file .env.production -f docker-compose.aliyun.yml up -d --build
+curl -fsS http://127.0.0.1/api/health
 ```
 
-部署细节见 [Aliyun ECS Web 部署说明](docs/ALIYUN_ECS_DEPLOY.md)。
+部署细节、必填环境变量、HTTPS 和验收清单见 [Aliyun ECS Web 部署说明](docs/ALIYUN_ECS_DEPLOY.md)。
 
 ## 目录地图
 

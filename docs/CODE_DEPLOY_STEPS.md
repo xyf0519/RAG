@@ -7,7 +7,7 @@ ENV_FILE=.env.public-http
 COMPOSE_FILE=docker-compose.public-http.yml
 ```
 
-如果以后切到生产环境变量文件，把下面命令里的 `.env.public-http` 换成 `.env.production`。
+如果以后切到严格生产模板，把下面命令里的 `.env.public-http` 换成 `.env.production`，把 `docker-compose.public-http.yml` 换成 `docker-compose.aliyun.yml`。
 
 ## 1. 进入项目目录
 
@@ -39,6 +39,12 @@ sudo docker compose --env-file .env.public-http -f docker-compose.public-http.ym
 ```
 
 这个命令会使用已有的 `rag-backend-base:latest`，不会重新安装 torch、transformers、FlagEmbedding 等大依赖。当前已验证普通后端构建约 3 秒级。
+
+如果要使用严格生产模板：
+
+```bash
+sudo docker compose --env-file .env.production -f docker-compose.aliyun.yml up -d --build backend
+```
 
 ## 3. 只改前端代码
 

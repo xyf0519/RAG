@@ -12,12 +12,15 @@ import smtplib
 import time
 from dataclasses import dataclass
 from email.message import EmailMessage
+from html import escape
 from pathlib import Path
 from threading import RLock
 import sqlite3
 
 
 UserRole = str
+EMAIL_CODE_TTL_SECONDS = 600
+EMAIL_CODE_COOLDOWN_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -121,10 +124,10 @@ class AuthStore:
                 """,
                 (normalized_email, purpose),
             ).fetchone()
-            if latest and now - float(latest["created_at"]) < 60:
+            if latest and now - float(latest["created_at"]) < EMAIL_CODE_COOLDOWN_SECONDS:
                 raise AuthError("验证码发送过于频繁，请稍后再试。")
 
-            code = os.getenv("AUTH_DEV_CODE") or self._make_code()
+            code = self._make_code()
             connection.execute(
                 """
                 INSERT INTO email_codes (
@@ -137,7 +140,7 @@ class AuthStore:
                     normalized_email,
                     purpose,
                     self._hash_secret(code),
-                    now + 600,
+                    now + EMAIL_CODE_TTL_SECONDS,
                     now,
                 ),
             )
@@ -395,7 +398,7 @@ def allowed_domain_from_env() -> str:
 
 
 def send_email_code(email: str, code: str, purpose: str) -> None:
-    """Send an email code or log it in development mode."""
+    """Send an email verification code or log it in development mode."""
 
     smtp_host = os.getenv("SMTP_HOST")
     smtp_from = os.getenv("SMTP_FROM") or os.getenv("SMTP_USER")
@@ -405,11 +408,7 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
         print(f"[xyfRAG auth] {purpose} code for {email}: {code}")
         return
 
-    message = EmailMessage()
-    message["Subject"] = "xyfRAG 邮箱验证码"
-    message["From"] = smtp_from
-    message["To"] = email
-    message.set_content(f"你的 xyfRAG 验证码是：{code}\n\n验证码 10 分钟内有效，请勿转发。")
+    message = build_email_code_message(email, code, purpose, smtp_from)
 
     port = int(os.getenv("SMTP_PORT", "465"))
     mode = os.getenv("SMTP_SECURITY", os.getenv("SMTP_TLS", "ssl")).lower()
@@ -431,6 +430,106 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
             smtp.send_message(message)
     else:
         raise AuthError("SMTP_SECURITY 只能是 ssl、starttls 或 none。")
+
+
+def build_email_code_message(email: str, code: str, purpose: str, sender: str) -> EmailMessage:
+    """Build the xyfRAG verification email with text and HTML bodies."""
+
+    purpose_title, purpose_action = _email_purpose_copy(purpose)
+    message = EmailMessage()
+    message["Subject"] = f"{code} 是你的 xyfRAG 验证码"
+    message["From"] = sender
+    message["To"] = email
+    message.set_content(_build_email_text_body(code, purpose_title, purpose_action))
+    message.add_alternative(
+        _build_email_html_body(
+            email=email,
+            code=code,
+            purpose_title=purpose_title,
+            purpose_action=purpose_action,
+        ),
+        subtype="html",
+    )
+    return message
+
+
+def _email_purpose_copy(purpose: str) -> tuple[str, str]:
+    if purpose == "register":
+        return "注册 xyfRAG 账号", "完成账号注册"
+    if purpose == "password_reset":
+        return "重置 xyfRAG 密码", "完成密码重置"
+    if purpose == "smtp_test":
+        return "验证 SMTP 配置", "确认邮件通道可用"
+    return "验证邮箱", "完成邮箱验证"
+
+
+def _build_email_text_body(code: str, purpose_title: str, purpose_action: str) -> str:
+    return "\n".join(
+        [
+            "xyfRAG 邮箱验证码",
+            "",
+            f"用途：{purpose_title}",
+            f"验证码：{code}",
+            "",
+            f"请在 10 分钟内使用此验证码{purpose_action}。",
+            "如果不是你本人操作，可以忽略这封邮件。",
+            "",
+            "此邮件由系统自动发送，请勿回复。",
+        ]
+    )
+
+
+def _build_email_html_body(email: str, code: str, purpose_title: str, purpose_action: str) -> str:
+    escaped_email = escape(email)
+    escaped_code = escape(code)
+    escaped_purpose_title = escape(purpose_title)
+    escaped_purpose_action = escape(purpose_action)
+    code_digits = "".join(
+        f'<span style="display:inline-block;min-width:28px">{escape(char)}</span>'
+        for char in code
+    )
+    return f"""<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>xyfRAG 邮箱验证码</title>
+  </head>
+  <body style="margin:0;background:#f6f8fa;color:#24292f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f8fa;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #d8dee4;border-radius:14px;overflow:hidden;box-shadow:0 16px 40px rgba(27,31,36,0.08);">
+            <tr>
+              <td style="padding:32px 36px 22px;text-align:center;border-bottom:1px solid #d8dee4;background:#ffffff;">
+                <div style="display:inline-block;width:48px;height:48px;line-height:48px;border-radius:50%;background:#0969da;color:#ffffff;font-size:20px;font-weight:700;text-align:center;">xR</div>
+                <h1 style="margin:18px 0 0;font-size:22px;line-height:1.35;font-weight:700;color:#24292f;">邮箱验证码</h1>
+                <p style="margin:8px 0 0;font-size:14px;line-height:1.6;color:#57606a;">用于 {escaped_purpose_title}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:30px 36px 34px;">
+                <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#24292f;">你好，{escaped_email}：</p>
+                <p style="margin:0 0 22px;font-size:15px;line-height:1.7;color:#24292f;">请使用下面的验证码{escaped_purpose_action}。</p>
+                <div style="margin:0 auto 22px;padding:18px 12px;border:1px solid #d8dee4;border-radius:12px;background:#f6f8fa;text-align:center;">
+                  <div style="font-family:ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:34px;line-height:1.2;font-weight:700;letter-spacing:4px;color:#0969da;">{code_digits}</div>
+                </div>
+                <p style="margin:0 0 10px;font-size:14px;line-height:1.7;color:#57606a;">验证码将在 <strong style="color:#24292f;">10 分钟</strong> 后失效。请勿转发或泄露给他人。</p>
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#57606a;">如果不是你本人操作，可以安全忽略这封邮件。</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 36px;background:#f6f8fa;border-top:1px solid #d8dee4;text-align:center;">
+                <p style="margin:0;font-size:12px;line-height:1.6;color:#6e7781;">xyfRAG 自动发送，请勿回复。</p>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:18px 0 0;font-size:12px;color:#6e7781;">验证码：<span style="font-family:ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;">{escaped_code}</span></p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
 
 
 def check_smtp_settings() -> None:
