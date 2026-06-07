@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 import { proxyBackendJson } from "@/server/rag/client";
 import { DESKTOP_USER, isDesktopMode } from "@/shared/config/runtime";
+import { mapAuthUser, type BackendAuthUser } from "@/shared/lib/auth-user";
 import type { AuthUser } from "@/shared/types/auth";
 
 const SESSION_COOKIE = "xyfrag.session";
@@ -17,7 +18,7 @@ type SessionPayload = {
 
 type BackendAuthResponse = {
   ok: boolean;
-  user?: AuthUser | null;
+  user?: BackendAuthUser | null;
   message?: string;
 };
 
@@ -104,7 +105,7 @@ export async function getCurrentUser(request?: NextRequest): Promise<AuthUser | 
   }
   try {
     const data = (await proxyBackendJson(`/api/v1/auth/users/${payload.userId}`)) as BackendAuthResponse;
-    return data.user ?? null;
+    return data.user ? mapAuthUser(data.user) : null;
   } catch {
     return null;
   }

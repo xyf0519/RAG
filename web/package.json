@@ -5,13 +5,13 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3000",
-    "dev:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next dev --hostname 127.0.0.1 --port 3000",
+    "dev:desktop": "node ../scripts/with_desktop_env.mjs next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
-    "build:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next build",
+    "build:desktop": "node ../scripts/with_desktop_env.mjs next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
-    "start:desktop": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop next start --hostname 127.0.0.1",
+    "start:desktop": "node ../scripts/with_desktop_env.mjs next start --hostname 127.0.0.1",
     "electron": "electron .",
-    "desktop:dev": "APP_MODE=desktop NEXT_PUBLIC_APP_MODE=desktop electron .",
+    "desktop:dev": "node ../scripts/with_desktop_env.mjs electron .",
     "desktop:backend": "node ../scripts/build_desktop_backend.mjs",
     "desktop:pack": "npm run build:desktop && npm run desktop:backend && electron-builder --dir",
     "desktop:dist": "npm run build:desktop && npm run desktop:backend && electron-builder",
@@ -58,6 +58,7 @@
     "appId": "cn.maverella.desktop",
     "productName": "Maverella",
     "asar": false,
+    "afterPack": "build/after-pack.cjs",
     "directories": {
       "output": "dist"
     },
@@ -98,11 +99,14 @@
     },
     "win": {
       "target": ["nsis"],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }

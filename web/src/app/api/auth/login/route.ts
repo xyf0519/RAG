@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { setSessionCookie } from "@/server/auth/session";
 import { proxyBackendJson } from "@/server/rag/client";
-import type { AuthUser } from "@/shared/types/auth";
+import { mapAuthUser, type BackendAuthUser } from "@/shared/lib/auth-user";
 
 export const runtime = "nodejs";
 
 type LoginResponse = {
   ok: boolean;
-  user?: AuthUser | null;
+  user?: BackendAuthUser | null;
   message?: string;
 };
 
@@ -19,9 +19,10 @@ export async function POST(request: NextRequest) {
       method: "POST",
       body: JSON.stringify(body),
     })) as LoginResponse;
-    const response = NextResponse.json(data);
-    if (data.user) {
-      setSessionCookie(response, data.user.id);
+    const user = data.user ? mapAuthUser(data.user) : null;
+    const response = NextResponse.json({ ...data, user });
+    if (user) {
+      setSessionCookie(response, user.id);
     }
     return response;
   } catch (error) {

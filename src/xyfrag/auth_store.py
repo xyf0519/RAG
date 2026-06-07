@@ -18,6 +18,12 @@ import sqlite3
 
 
 UserRole = str
+AVATAR_MAX_BYTES = 512 * 1024
+AVATAR_ALLOWED_HEADERS = {
+    "data:image/png;base64",
+    "data:image/jpeg;base64",
+    "data:image/webp;base64",
+}
 
 
 @dataclass(frozen=True)
@@ -26,6 +32,7 @@ class AuthUserRecord:
     email: str
     name: str
     role: UserRole
+    avatar_url: str | None
     email_verified_at: float | None
     created_at: float
     last_login_at: float | None
@@ -100,6 +107,12 @@ class AuthStore:
                 ON audit_logs(created_at DESC);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(users)").fetchall()
+            }
+            if "avatar_url" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
 
     def start_email_code(self, email: str, purpose: str) -> str:
         normalized_email = self.normalize_email(email)
@@ -254,6 +267,25 @@ class AuthStore:
         )
         return self.require_user(target.id)
 
+    def update_user_profile(self, user_id: str, name: str, avatar_url: str | None) -> AuthUserRecord:
+        user = self.require_user(user_id)
+        display_name = name.strip()
+        if not 1 <= len(display_name) <= 80:
+            raise AuthError("昵称需为 1-80 个字符。")
+        normalized_avatar = self._normalize_avatar_url(avatar_url)
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE users SET name = ?, avatar_url = ? WHERE id = ?",
+                (display_name, normalized_avatar, user.id),
+            )
+        self.audit(
+            user.id,
+            user.email,
+            "user_profile_updated",
+            json.dumps({"name": display_name, "avatar_changed": normalized_avatar != user.avatar_url}, ensure_ascii=False),
+        )
+        return self.require_user(user.id)
+
     def consume_code(self, email: str, purpose: str, code: str) -> None:
         now = time.time()
         normalized_email = self.normalize_email(email)
@@ -329,11 +361,30 @@ class AuthStore:
             email=str(row["email"]),
             name=str(row["name"]),
             role=str(row["role"]),
+            avatar_url=str(row["avatar_url"]) if "avatar_url" in row.keys() and row["avatar_url"] else None,
             email_verified_at=row["email_verified_at"],
             created_at=float(row["created_at"]),
             last_login_at=row["last_login_at"],
             disabled_at=row["disabled_at"],
         )
+
+    @staticmethod
+    def _normalize_avatar_url(value: str | None) -> str | None:
+        if value is None:
+            return None
+        avatar = value.strip()
+        if not avatar:
+            return None
+        header, separator, payload = avatar.partition(",")
+        if separator != "," or header not in AVATAR_ALLOWED_HEADERS:
+            raise AuthError("头像仅支持 PNG、JPG 或 WebP 图片。")
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except Exception as exc:
+            raise AuthError("头像图片数据无效。") from exc
+        if len(raw) > AVATAR_MAX_BYTES:
+            raise AuthError("头像图片不能超过 512 KB。")
+        return avatar
 
     @staticmethod
     def _make_code() -> str:

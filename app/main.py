@@ -598,6 +598,7 @@ class AuthUserResponse(BaseModel):
     name: str
     email: str
     role: str
+    avatar_url: Optional[str] = None
     email_verified_at: Optional[float] = None
     created_at: Optional[float] = None
     last_login_at: Optional[float] = None
@@ -618,6 +619,11 @@ class AuthUsersResponse(BaseModel):
 
 class UserRoleUpdateRequest(BaseModel):
     role: Literal["user", "admin"]
+
+
+class UserProfileUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    avatar_url: Optional[str] = Field(default=None, max_length=700_000)
 
 
 class DesktopSettingsRequest(BaseModel):
@@ -812,6 +818,20 @@ async def auth_get_user(user_id: str, _internal: InternalAuth) -> AuthResponse:
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return AuthResponse(ok=True, user=_auth_user_response(user))
+
+
+@app.patch("/api/v1/auth/users/{user_id}/profile", response_model=AuthResponse)
+async def auth_update_user_profile(
+    user_id: str,
+    request: UserProfileUpdateRequest,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        user = store.update_user_profile(user_id, request.name, request.avatar_url)
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AuthResponse(ok=True, user=_auth_user_response(user, store), message="个人资料已更新。")
 
 
 @app.get("/api/v1/auth/users", response_model=AuthUsersResponse)
@@ -1214,6 +1234,24 @@ async def upload_documents(
     return documents
 
 
+@app.delete(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}",
+    response_model=KnowledgeBaseResponse,
+)
+async def delete_document(
+    knowledge_base_id: str,
+    document_id: str,
+    _internal: InternalAuth,
+) -> KnowledgeBaseResponse:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        knowledge_base = store.delete_document(knowledge_base_id, document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="文档不存在。") from exc
+    _invalidate_service(app, knowledge_base_id)
+    return _kb_response(knowledge_base)
+
+
 @app.post(
     "/api/v1/knowledge-bases/{knowledge_base_id}/index-jobs",
     response_model=IndexJobResponse,
@@ -1441,6 +1479,7 @@ def _auth_user_response(record: AuthUserRecord, store: AuthStore | None = None) 
         name=record.name,
         email=record.email,
         role=record.role,
+        avatar_url=record.avatar_url,
         email_verified_at=record.email_verified_at,
         created_at=record.created_at,
         last_login_at=record.last_login_at,

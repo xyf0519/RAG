@@ -142,6 +142,14 @@ class KnowledgeBaseStore:
                     FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS document_deletions (
+                    knowledge_base_id TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    deleted_at REAL NOT NULL,
+                    PRIMARY KEY (knowledge_base_id, filename),
+                    FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS index_jobs (
                     id TEXT PRIMARY KEY,
                     knowledge_base_id TEXT NOT NULL,
@@ -356,6 +364,13 @@ class KnowledgeBaseStore:
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
+                DELETE FROM document_deletions
+                WHERE knowledge_base_id = ? AND filename = ?
+                """,
+                (knowledge_base_id, safe_name),
+            )
+            connection.execute(
+                """
                 INSERT OR REPLACE INTO documents (
                     id, knowledge_base_id, filename, title, size, status, created_at
                 )
@@ -385,6 +400,77 @@ class KnowledgeBaseStore:
                 "created_at": now,
             }
         )
+
+    def delete_document(
+        self,
+        knowledge_base_id: str,
+        document_id: str,
+    ) -> KnowledgeBaseRecord:
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            self._sync_documents(connection, knowledge_base_id)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE knowledge_base_id = ? AND id = ?
+                """,
+                (knowledge_base_id, document_id),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Document not found: {document_id}")
+
+            filename = Path(str(row["filename"])).name
+            target_path = self.raw_dir(knowledge_base_id) / filename
+            if target_path.exists():
+                target_path.unlink()
+
+            now = time.time()
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO document_deletions (
+                    knowledge_base_id, filename, deleted_at
+                )
+                VALUES (?, ?, ?)
+                """,
+                (knowledge_base_id, filename, now),
+            )
+            connection.execute(
+                """
+                DELETE FROM documents
+                WHERE knowledge_base_id = ? AND id = ?
+                """,
+                (knowledge_base_id, document_id),
+            )
+            count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM documents
+                    WHERE knowledge_base_id = ?
+                    """,
+                    (knowledge_base_id,),
+                ).fetchone()["count"]
+            )
+            connection.execute(
+                """
+                UPDATE knowledge_bases
+                SET document_count = ?,
+                    index_status = ?,
+                    last_indexed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    count,
+                    "pending" if count else "not_indexed",
+                    now,
+                    knowledge_base_id,
+                ),
+            )
+
+        self._clear_index_files(knowledge_base_id)
+        return self.require_knowledge_base(knowledge_base_id)
 
     def create_index_job(self, knowledge_base_id: str) -> IndexJobRecord:
         self.require_knowledge_base(knowledge_base_id)
@@ -890,12 +976,16 @@ class KnowledgeBaseStore:
         self.classifier_dir(knowledge_base_id)
 
     def _copy_legacy_sources(self, knowledge_base_id: str) -> None:
+        with self._lock, self._connect() as connection:
+            deleted = self._deleted_document_filenames(connection, knowledge_base_id)
         for source in self._settings.paths.raw_docs_dir.glob("*"):
             if source.is_file() and source.suffix.lower() in {".md", ".txt"}:
+                if source.name in deleted:
+                    continue
                 target = self.raw_dir(knowledge_base_id) / source.name
                 if not target.exists():
                     shutil.copy2(source, target)
-        if self._settings.paths.index_dir.exists():
+        if self._settings.paths.index_dir.exists() and not deleted:
             index_dir = self.index_dir(knowledge_base_id)
             for name in ("chunks.json", "embeddings.npy"):
                 source = self._settings.paths.index_dir / name
@@ -917,6 +1007,28 @@ class KnowledgeBaseStore:
         index_dir = self.index_dir(knowledge_base_id)
         return (index_dir / "chunks.json").exists() and (index_dir / "embeddings.npy").exists()
 
+    def _clear_index_files(self, knowledge_base_id: str) -> None:
+        index_dir = self.index_dir(knowledge_base_id)
+        for name in ("chunks.json", "embeddings.npy"):
+            path = index_dir / name
+            if path.exists():
+                path.unlink()
+
+    @staticmethod
+    def _deleted_document_filenames(
+        connection: sqlite3.Connection,
+        knowledge_base_id: str,
+    ) -> set[str]:
+        rows = connection.execute(
+            """
+            SELECT filename
+            FROM document_deletions
+            WHERE knowledge_base_id = ?
+            """,
+            (knowledge_base_id,),
+        ).fetchall()
+        return {str(row["filename"]) for row in rows}
+
     def _sync_documents(self, connection: sqlite3.Connection, knowledge_base_id: str) -> int:
         raw_dir = self.raw_dir(knowledge_base_id)
         existing_rows = connection.execute(
@@ -924,9 +1036,12 @@ class KnowledgeBaseStore:
             (knowledge_base_id,),
         ).fetchall()
         existing = {str(row["filename"]) for row in existing_rows}
+        deleted = self._deleted_document_filenames(connection, knowledge_base_id)
         now = time.time()
         for path in sorted(raw_dir.glob("*")):
             if not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+                continue
+            if path.name in deleted:
                 continue
             if path.name in existing:
                 continue

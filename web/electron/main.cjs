@@ -31,6 +31,11 @@ function getWebRoot() {
   return app.getAppPath();
 }
 
+function getWindowIconPath() {
+  const iconPath = path.join(getWebRoot(), "build", "icon.ico");
+  return fs.existsSync(iconPath) ? iconPath : undefined;
+}
+
 function getUserDataRoot() {
   const root = path.join(app.getPath("userData"), "rag-data");
   fs.mkdirSync(root, { recursive: true });
@@ -317,6 +322,7 @@ async function createWindow(message = "正在初始化本机资料库，马上�
     minWidth: 1060,
     minHeight: 720,
     title: "Maverella",
+    icon: getWindowIconPath(),
     backgroundColor: "#f7f9f8",
     webPreferences: {
       contextIsolation: true,

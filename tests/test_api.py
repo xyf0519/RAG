@@ -160,6 +160,45 @@ def test_email_auth_register_login_and_reset() -> None:
         assert new_login.status_code == 200
 
 
+def test_user_profile_update_saves_avatar_and_rejects_invalid_format() -> None:
+    avatar = "data:image/png;base64,aGVsbG8="
+
+    with TestClient(app) as client:
+        assert client.post("/api/v1/auth/register/start", json={"email": "profile@zju.edu.cn"}).status_code == 200
+        registered = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "profile@zju.edu.cn",
+                "password": "password123",
+                "code": "123456",
+                "name": "原昵称",
+            },
+        )
+        assert registered.status_code == 200
+        user = registered.json()["user"]
+
+        update_response = client.patch(
+            f"/api/v1/auth/users/{user['id']}/profile",
+            json={"name": "新昵称", "avatar_url": avatar},
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["user"]
+        assert updated["name"] == "新昵称"
+        assert updated["avatar_url"] == avatar
+
+        list_response = client.get("/api/v1/auth/users")
+        assert list_response.status_code == 200
+        listed = next(item for item in list_response.json()["users"] if item["id"] == user["id"])
+        assert listed["name"] == "新昵称"
+        assert listed["avatar_url"] == avatar
+
+        invalid_response = client.patch(
+            f"/api/v1/auth/users/{user['id']}/profile",
+            json={"name": "新昵称", "avatar_url": "data:image/gif;base64,aGVsbG8="},
+        )
+        assert invalid_response.status_code == 400
+
+
 def test_admin_email_gets_admin_role() -> None:
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
