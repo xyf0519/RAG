@@ -21,6 +21,12 @@ import sqlite3
 UserRole = str
 EMAIL_CODE_TTL_SECONDS = 600
 EMAIL_CODE_COOLDOWN_SECONDS = 60
+AVATAR_MAX_BYTES = 512 * 1024
+AVATAR_ALLOWED_HEADERS = {
+    "data:image/png;base64",
+    "data:image/jpeg;base64",
+    "data:image/webp;base64",
+}
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,7 @@ class AuthUserRecord:
     email: str
     name: str
     role: UserRole
+    avatar_url: str | None
     email_verified_at: float | None
     created_at: float
     last_login_at: float | None
@@ -103,6 +110,12 @@ class AuthStore:
                 ON audit_logs(created_at DESC);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(users)").fetchall()
+            }
+            if "avatar_url" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
 
     def start_email_code(self, email: str, purpose: str) -> str:
         normalized_email = self.normalize_email(email)
@@ -257,6 +270,25 @@ class AuthStore:
         )
         return self.require_user(target.id)
 
+    def update_user_profile(self, user_id: str, name: str, avatar_url: str | None) -> AuthUserRecord:
+        user = self.require_user(user_id)
+        display_name = name.strip()
+        if not 1 <= len(display_name) <= 80:
+            raise AuthError("昵称需为 1-80 个字符。")
+        normalized_avatar = self._normalize_avatar_url(avatar_url)
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE users SET name = ?, avatar_url = ? WHERE id = ?",
+                (display_name, normalized_avatar, user.id),
+            )
+        self.audit(
+            user.id,
+            user.email,
+            "user_profile_updated",
+            json.dumps({"name": display_name, "avatar_changed": normalized_avatar != user.avatar_url}, ensure_ascii=False),
+        )
+        return self.require_user(user.id)
+
     def consume_code(self, email: str, purpose: str, code: str) -> None:
         now = time.time()
         normalized_email = self.normalize_email(email)
@@ -332,11 +364,30 @@ class AuthStore:
             email=str(row["email"]),
             name=str(row["name"]),
             role=str(row["role"]),
+            avatar_url=str(row["avatar_url"]) if "avatar_url" in row.keys() and row["avatar_url"] else None,
             email_verified_at=row["email_verified_at"],
             created_at=float(row["created_at"]),
             last_login_at=row["last_login_at"],
             disabled_at=row["disabled_at"],
         )
+
+    @staticmethod
+    def _normalize_avatar_url(value: str | None) -> str | None:
+        if value is None:
+            return None
+        avatar = value.strip()
+        if not avatar:
+            return None
+        header, separator, payload = avatar.partition(",")
+        if separator != "," or header not in AVATAR_ALLOWED_HEADERS:
+            raise AuthError("头像仅支持 PNG、JPG 或 WebP 图片。")
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except Exception as exc:
+            raise AuthError("头像图片数据无效。") from exc
+        if len(raw) > AVATAR_MAX_BYTES:
+            raise AuthError("头像图片不能超过 512 KB。")
+        return avatar
 
     @staticmethod
     def _make_code() -> str:
@@ -405,7 +456,7 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
     username = os.getenv("SMTP_USER", "")
     password = os.getenv("SMTP_PASSWORD", "")
     if not smtp_host or not smtp_from or not username or not password:
-        print(f"[xyfRAG auth] {purpose} code for {email}: {code}")
+        print(f"[Maverella auth] {purpose} code for {email}: {code}")
         return
 
     message = build_email_code_message(email, code, purpose, smtp_from)
@@ -433,11 +484,11 @@ def send_email_code(email: str, code: str, purpose: str) -> None:
 
 
 def build_email_code_message(email: str, code: str, purpose: str, sender: str) -> EmailMessage:
-    """Build the xyfRAG verification email with text and HTML bodies."""
+    """Build the Maverella verification email with text and HTML bodies."""
 
     purpose_title, purpose_action = _email_purpose_copy(purpose)
     message = EmailMessage()
-    message["Subject"] = f"{code} 是你的 xyfRAG 验证码"
+    message["Subject"] = f"{code} 是你的 Maverella 验证码"
     message["From"] = sender
     message["To"] = email
     message.set_content(_build_email_text_body(code, purpose_title, purpose_action))
@@ -455,9 +506,9 @@ def build_email_code_message(email: str, code: str, purpose: str, sender: str) -
 
 def _email_purpose_copy(purpose: str) -> tuple[str, str]:
     if purpose == "register":
-        return "注册 xyfRAG 账号", "完成账号注册"
+        return "注册 Maverella 账号", "完成账号注册"
     if purpose == "password_reset":
-        return "重置 xyfRAG 密码", "完成密码重置"
+        return "重置 Maverella 密码", "完成密码重置"
     if purpose == "smtp_test":
         return "验证 SMTP 配置", "确认邮件通道可用"
     return "验证邮箱", "完成邮箱验证"
@@ -466,7 +517,7 @@ def _email_purpose_copy(purpose: str) -> tuple[str, str]:
 def _build_email_text_body(code: str, purpose_title: str, purpose_action: str) -> str:
     return "\n".join(
         [
-            "xyfRAG 邮箱验证码",
+            "Maverella 邮箱验证码",
             "",
             f"用途：{purpose_title}",
             f"验证码：{code}",
@@ -493,7 +544,7 @@ def _build_email_html_body(email: str, code: str, purpose_title: str, purpose_ac
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>xyfRAG 邮箱验证码</title>
+    <title>Maverella 邮箱验证码</title>
   </head>
   <body style="margin:0;background:#f6f8fa;color:#24292f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f8fa;padding:32px 12px;">
@@ -520,7 +571,7 @@ def _build_email_html_body(email: str, code: str, purpose_title: str, purpose_ac
             </tr>
             <tr>
               <td style="padding:18px 36px;background:#f6f8fa;border-top:1px solid #d8dee4;text-align:center;">
-                <p style="margin:0;font-size:12px;line-height:1.6;color:#6e7781;">xyfRAG 自动发送，请勿回复。</p>
+                <p style="margin:0;font-size:12px;line-height:1.6;color:#6e7781;">Maverella 自动发送，请勿回复。</p>
               </td>
             </tr>
           </table>

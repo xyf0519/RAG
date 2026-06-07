@@ -3,7 +3,6 @@
 import {
   Activity,
   Archive,
-  BookOpenText,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -35,6 +34,7 @@ import {
   Star,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   UploadCloud,
   UserCog,
   Users,
@@ -94,6 +94,8 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
+const PRODUCT_NAME = "Maverella";
+const ADMIN_CONTACT_EMAIL = "xinyufei@zju.edu.cn";
 
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
@@ -139,6 +141,7 @@ export function ChatWorkspace() {
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE.id);
   const [knowledgeNotice, setKnowledgeNotice] = useState("知识库运维状态正常。");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -311,6 +314,7 @@ export function ChatWorkspace() {
             user={auth.user}
             onSignOut={auth.signOut}
             onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenHelp={() => setHelpOpen(true)}
           />
 
           {workspaceView === "knowledge" && auth.isAdmin ? (
@@ -361,6 +365,7 @@ export function ChatWorkspace() {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
+      {helpOpen ? <UserGuideModal onClose={() => setHelpOpen(false)} /> : null}
     </main>
   );
 }
@@ -425,7 +430,7 @@ function ChatWorkspaceView({
           <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="truncate text-sm font-semibold">xyfRAG</h1>
+                <h1 className="truncate text-sm font-semibold">{PRODUCT_NAME}</h1>
                 <StatusBadge status={chat.status} />
               </div>
               <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
@@ -550,10 +555,10 @@ function KnowledgeAddWorkspace({
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const visibleKnowledgeBases = knowledgeBases.slice(0, 5);
-  const visibleDocuments = documents.slice(0, 4);
   const selectedClassifierModel =
     classifierModels.find((model) => model.id === selectedClassifierModelId) ?? classifierModels[0] ?? null;
   const selectedClassifierMetrics = parseClassifierModelMetrics(selectedClassifierModel?.metrics_json);
@@ -656,6 +661,36 @@ function KnowledgeAddWorkspace({
       onNotice(error instanceof Error ? error.message : "文档上传失败。");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function deleteDocument(document: KnowledgeDocument) {
+    if (deletingDocumentId) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除「${document.title}」吗？删除后需要重新构建索引。`);
+    if (!confirmed) {
+      return;
+    }
+    setDeletingDocumentId(document.id);
+    try {
+      const response = await fetch(
+        `/api/knowledge-bases/${encodeURIComponent(selectedKnowledgeBase.id)}/documents/${encodeURIComponent(document.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "文档删除失败。"));
+      }
+      setDocuments((current) => current.filter((item) => item.id !== document.id));
+      onNotice("文档已删除，请重新构建索引。");
+      await onRefresh();
+      await refreshDocuments();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "文档删除失败。");
+    } finally {
+      setDeletingDocumentId("");
     }
   }
 
@@ -834,18 +869,18 @@ function KnowledgeAddWorkspace({
                 </div>
               </div>
 
-              <div className="min-h-0 overflow-hidden pr-1">
+              <div className="min-h-0 overflow-y-auto pr-1">
                 <div className="space-y-2">
-                  {documents.length ? visibleDocuments.map((document) => (
-                    <CompactDocumentRow key={document.id} document={document} />
+                  {documents.length ? documents.map((document) => (
+                    <CompactDocumentRow
+                      key={document.id}
+                      document={document}
+                      deleting={deletingDocumentId === document.id}
+                      onDelete={() => void deleteDocument(document)}
+                    />
                   )) : (
                     <PanelEmpty icon={UploadCloud} title="等待资料" description="上传后即可构建索引。" />
                   )}
-                  {documents.length > visibleDocuments.length ? (
-                    <p className="px-1 text-xs text-[var(--muted)]">
-                      还有 {documents.length - visibleDocuments.length} 个文档
-                    </p>
-                  ) : null}
                 </div>
               </div>
             </CardContent>
@@ -1726,6 +1761,56 @@ function UserStatCard({
   );
 }
 
+function getUserInitial(user: Pick<AuthUser, "name" | "email" | "avatarUrl">) {
+  return (user.name || user.email || "?").trim().slice(0, 1).toUpperCase();
+}
+
+function UserAvatar({
+  user,
+  size = "md",
+  className,
+}: {
+  user: Pick<AuthUser, "name" | "email" | "avatarUrl">;
+  size?: "xs" | "sm" | "md" | "lg";
+  className?: string;
+}) {
+  const sizeClass = {
+    xs: "h-7 w-7 text-xs",
+    sm: "h-8 w-8 text-xs",
+    md: "h-10 w-10 text-sm",
+    lg: "h-11 w-11 text-sm",
+  }[size];
+  if (user.avatarUrl) {
+    return (
+      <Image
+        src={user.avatarUrl}
+        alt=""
+        width={44}
+        height={44}
+        unoptimized
+        className={cn(
+          "shrink-0 rounded-full object-cover shadow-[0_14px_30px_rgba(0,108,99,0.22)]",
+          sizeClass,
+          className,
+        )}
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#18a999_0%,#0b726a_100%)] font-semibold text-white shadow-[0_14px_30px_rgba(0,108,99,0.22)]",
+        sizeClass,
+        className,
+      )}
+      aria-hidden="true"
+    >
+      {getUserInitial(user)}
+    </div>
+  );
+}
+
 function UserRow({
   user,
   currentUserId,
@@ -1742,9 +1827,7 @@ function UserRow({
   return (
     <div className="grid gap-3 px-4 py-4 transition hover:bg-[var(--panel-muted)] lg:grid-cols-[minmax(220px,1.3fr)_120px_160px_210px] lg:items-center">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(145deg,#e8f7f4_0%,#ffffff_100%)] text-sm font-semibold text-[var(--accent-strong)] shadow-inner">
-          {user.name.slice(0, 1).toUpperCase()}
-        </div>
+        <UserAvatar user={user} size="lg" />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <p className="truncate text-sm font-semibold">{user.name}</p>
@@ -1886,7 +1969,7 @@ function ProductSidebar({
               title="展开侧栏"
             >
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
-                <BookOpenText size={22} aria-hidden="true" />
+                <Image src="/images/icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-xl object-cover" aria-hidden="true" />
               </span>
               <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
                 <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
@@ -1895,11 +1978,9 @@ function ProductSidebar({
             </button>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[linear-gradient(145deg,#0a877a_0%,#03433f_100%)] text-white shadow-md shadow-teal-950/10">
-                <BookOpenText size={20} aria-hidden="true" />
-              </div>
+              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">xyfRAG</h2>
+                <h2 className="truncate text-base font-semibold">{PRODUCT_NAME}</h2>
                 <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
               </div>
             </div>
@@ -2058,9 +2139,7 @@ function ProductSidebar({
               aria-label={`${user.name} · 账户菜单`}
               aria-expanded={accountMenuOpen}
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold">
-                {user.name.slice(0, 1)}
-              </span>
+              <UserAvatar user={user} size="xs" className="shadow-none" />
               <IconTooltip label={`${user.name} · 账户菜单`} />
             </button>
           ) : (
@@ -2072,9 +2151,7 @@ function ProductSidebar({
               aria-expanded={accountMenuOpen}
             >
               <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[var(--accent-strong)]">
-                  <ShieldCheck size={15} aria-hidden="true" />
-                </div>
+                <UserAvatar user={user} size="sm" className="shadow-none" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{user.name}</p>
                   <p className="truncate text-xs text-[var(--muted)]">
@@ -2110,9 +2187,7 @@ function AccountMenu({
       )}
     >
       <div className="flex items-center gap-3 px-2 py-2.5">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#18a999_0%,#0b726a_100%)] text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,108,99,0.22)]">
-          {user.name.slice(0, 1)}
-        </div>
+        <UserAvatar user={user} />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{user.name}</p>
           <p className="truncate text-xs text-[var(--muted)]">
@@ -2169,12 +2244,23 @@ function AccountSettingsModal({
   user: AuthUser;
   onClose: () => void;
 }) {
+  const auth = useAuth();
   const storageKey = `xyfrag.runtime-config.${user.id}`;
   const [config, setConfig] = useState<RuntimeConfig>(DEFAULT_RUNTIME_CONFIG);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState<ConnectivityTarget | null>(null);
   const [results, setResults] = useState<Partial<Record<ConnectivityTarget, ConnectivityResult>>>({});
-  const [activePanel, setActivePanel] = useState<"settings" | "connection">("settings");
+  const [activePanel, setActivePanel] = useState<"profile" | "settings" | "connection">("profile");
+  const [profileName, setProfileName] = useState(user.name);
+  const [profileAvatar, setProfileAvatar] = useState(user.avatarUrl ?? "");
+  const [profileNotice, setProfileNotice] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    setProfileName(user.name);
+    setProfileAvatar(user.avatarUrl ?? "");
+  }, [user.avatarUrl, user.name]);
 
   useEffect(() => {
     try {
@@ -2231,6 +2317,40 @@ function AccountSettingsModal({
     }
   }
 
+  async function saveProfile() {
+    setProfileError("");
+    setProfileNotice("");
+    const name = profileName.trim();
+    if (!name) {
+      setProfileError("昵称不能为空。");
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const response = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, avatarUrl: profileAvatar || null }),
+      });
+      const data = (await response.json()) as { user?: AuthUser | null; error?: string; message?: string };
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || "个人资料保存失败。");
+      }
+      auth.setAuthenticatedUser(data.user);
+      setProfileNotice(data.message || "个人资料已更新。");
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "个人资料保存失败。");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  function clearProfileAvatar() {
+    setProfileAvatar("");
+    setProfileNotice("");
+    setProfileError("");
+  }
+
   return (
     <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/18 px-4 py-6 backdrop-blur-md">
       <div className="h-[min(650px,calc(100vh-3rem))] w-full max-w-[980px] overflow-hidden rounded-[28px] border border-white/85 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
@@ -2246,9 +2366,7 @@ function AccountSettingsModal({
             </button>
             <div className="rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#18a999_0%,#0b726a_100%)] text-sm font-semibold text-white">
-                  {user.name.slice(0, 1)}
-                </div>
+                <UserAvatar user={user} size="lg" className="shadow-none" />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{user.name}</p>
                   <p className="truncate text-xs text-[var(--muted)]">{user.role === "admin" ? "管理员" : "普通用户"}</p>
@@ -2256,6 +2374,19 @@ function AccountSettingsModal({
               </div>
             </div>
             <nav className="mt-5 space-y-2">
+              <button
+                type="button"
+                onClick={() => setActivePanel("profile")}
+                className={cn(
+                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  activePanel === "profile"
+                    ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
+                    : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
+                )}
+              >
+                <UserCog size={17} aria-hidden="true" />
+                个人资料
+              </button>
               <button
                 type="button"
                 onClick={() => setActivePanel("settings")}
@@ -2287,14 +2418,31 @@ function AccountSettingsModal({
 
           <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header className="border-b border-[var(--border)] px-7 py-5">
-              <h2 className="text-xl font-semibold tracking-normal">{activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
+              <h2 className="text-xl font-semibold tracking-normal">{activePanel === "profile" ? "个人资料" : activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                {activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
+                {activePanel === "profile" ? "昵称与头像" : activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
               </p>
             </header>
 
             <div className="min-h-0 overflow-hidden p-5">
-              {activePanel === "settings" ? (
+              {activePanel === "profile" ? (
+                <ProfileSettingsCard
+                  user={{ ...user, name: profileName, avatarUrl: profileAvatar || null }}
+                  name={profileName}
+                  avatarUrl={profileAvatar}
+                  saving={savingProfile}
+                  notice={profileNotice}
+                  error={profileError}
+                  onNameChange={setProfileName}
+                  onAvatarChange={(value) => {
+                    setProfileAvatar(value);
+                    setProfileNotice("");
+                    setProfileError("");
+                  }}
+                  onClearAvatar={clearProfileAvatar}
+                  onSave={() => void saveProfile()}
+                />
+              ) : activePanel === "settings" ? (
                 <Card className="mx-auto min-h-0 max-w-[560px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
                   <CardHeader>
                     <h3 className="text-sm font-semibold">配置</h3>
@@ -2383,6 +2531,119 @@ function SettingsField({
   );
 }
 
+function ProfileSettingsCard({
+  user,
+  name,
+  avatarUrl,
+  saving,
+  notice,
+  error,
+  onNameChange,
+  onAvatarChange,
+  onClearAvatar,
+  onSave,
+}: {
+  user: AuthUser;
+  name: string;
+  avatarUrl: string;
+  saving: boolean;
+  notice: string;
+  error: string;
+  onNameChange: (value: string) => void;
+  onAvatarChange: (value: string) => void;
+  onClearAvatar: () => void;
+  onSave: () => void;
+}) {
+  const [fileError, setFileError] = useState("");
+
+  async function handleAvatarFile(file: File | null) {
+    setFileError("");
+    if (!file) {
+      return;
+    }
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      setFileError("头像仅支持 PNG、JPG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > 512 * 1024) {
+      setFileError("头像图片不能超过 512 KB。");
+      return;
+    }
+    const dataUrl = await fileToDataUrl(file);
+    onAvatarChange(dataUrl);
+  }
+
+  return (
+    <Card className="mx-auto min-h-0 max-w-[620px] overflow-hidden border-white/80 bg-white/84 shadow-[var(--shadow-soft)]">
+      <CardHeader>
+        <h3 className="text-sm font-semibold">资料</h3>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="flex items-center gap-4 rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] p-4">
+          <UserAvatar user={user} size="lg" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold">{name || user.name}</p>
+            <p className="truncate text-xs text-[var(--muted)]">{user.email}</p>
+          </div>
+        </div>
+
+        <SettingsField
+          label="昵称"
+          value={name}
+          onChange={onNameChange}
+          placeholder="请输入昵称"
+        />
+
+        <div>
+          <span className="mb-2 block text-xs font-semibold text-[var(--foreground)]">头像</span>
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <label className="flex h-11 cursor-pointer items-center justify-center rounded-xl border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--accent-strong)] transition hover:bg-[var(--accent-tint)]">
+              上传头像
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                onChange={(event) => void handleAvatarFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            <Button type="button" variant="ghost" size="sm" onClick={onClearAvatar} disabled={!avatarUrl}>
+              清除头像
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-[var(--muted)]">支持 PNG、JPG、WebP，大小不超过 512 KB。</p>
+          {fileError ? <p className="mt-2 text-xs font-medium text-[var(--danger)]">{fileError}</p> : null}
+        </div>
+
+        {error ? (
+          <p className="rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm font-medium text-[var(--danger)]">
+            {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p className="rounded-xl border border-[var(--accent-soft)] bg-[var(--accent-tint)] px-3 py-2 text-sm font-medium text-[var(--accent-strong)]">
+            {notice}
+          </p>
+        ) : null}
+
+        <Button type="button" variant="primary" className="w-full justify-center" onClick={onSave} disabled={saving}>
+          {saving ? <Loader2 className="animate-spin" size={15} aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
+          {saving ? "保存中" : "保存个人资料"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("头像读取失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function ConnectivityCard({
   title,
   description,
@@ -2432,18 +2693,140 @@ function ConnectivityCard({
   );
 }
 
+function UserGuideModal({ onClose }: { onClose: () => void }) {
+  type GuideSection = {
+    id: string;
+    title: string;
+    icon: typeof Settings;
+    steps: string[];
+  };
+  const guideSections: GuideSection[] = [
+    {
+      id: "start",
+      title: "开始使用",
+      icon: Database,
+      steps: [
+        "登录后直接进入问答工作台。",
+        "选择可用知识库，输入问题并发送。",
+        "回答下方会显示引用来源，便于核对依据。",
+      ],
+    },
+    {
+      id: "connection",
+      title: "服务状态",
+      icon: HeartPulse,
+      steps: [
+        "顶部状态显示在线时，可以正常提问。",
+        "如果显示离线，请等待管理员恢复服务。",
+        `如果一直离线，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
+      ],
+    },
+    {
+      id: "faq",
+      title: "常见问题",
+      icon: ShieldCheck,
+      steps: [
+        `无法登录或无可用知识库时，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
+        "回答没有引用来源时，调整问题范围或请管理员确认索引是否完成。",
+        "页面显示离线时，请稍后重试或联系管理员。",
+      ],
+    },
+  ];
+  const [activeSectionId, setActiveSectionId] = useState(guideSections[0].id);
+  const activeSection = guideSections.find((section) => section.id === activeSectionId) ?? guideSections[0];
+  const ActiveIcon = activeSection.icon;
+
+  return (
+    <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/18 px-4 py-5 backdrop-blur-md">
+      <div className="flex h-[min(680px,calc(100vh-2rem))] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-white/85 bg-white/95 shadow-[0_34px_90px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+              <HelpCircle size={18} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xl font-semibold tracking-normal">用户使用说明</h2>
+            </div>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} title="关闭使用说明" aria-label="关闭使用说明">
+            <X size={18} aria-hidden="true" />
+          </Button>
+        </header>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
+          <aside className="border-b border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] p-3 lg:border-b-0 lg:border-r">
+            <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-2 lg:overflow-visible lg:pb-0">
+              {guideSections.map((section, index) => {
+                const Icon = section.icon;
+                const active = section.id === activeSection.id;
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => setActiveSectionId(section.id)}
+                    className={cn(
+                      "flex min-w-[150px] items-center gap-3 rounded-xl border px-3 py-3 text-left transition lg:min-w-0 lg:w-full",
+                      active
+                        ? "border-[var(--accent-soft)] bg-white font-semibold text-[var(--foreground)] shadow-[0_10px_28px_rgba(15,23,42,0.08)]"
+                        : "border-transparent text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
+                    )}
+                  >
+                    <span className={cn(
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                      active ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]" : "bg-white/70 text-[var(--muted)]",
+                    )}>
+                      <Icon size={15} aria-hidden="true" />
+                    </span>
+                    <span className="truncate text-base">{index + 1}. {section.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <main className="min-h-0 overflow-y-auto p-4 sm:p-5">
+            <section className="min-h-full rounded-xl border border-[var(--border)] bg-white/88 p-4 shadow-sm sm:p-5">
+              <div className="flex items-center gap-3 border-b border-[var(--border)] pb-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
+                  <ActiveIcon size={20} aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold tracking-normal">{activeSection.title}</h3>
+                </div>
+              </div>
+
+              <ol className="mt-5 space-y-3">
+                {activeSection.steps.map((step, index) => (
+                  <li key={step} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] px-3 py-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--panel-strong)] text-sm font-semibold text-[var(--accent-strong)]">
+                      {index + 1}
+                    </span>
+                    <p className="self-center text-sm leading-6 text-[var(--foreground)]">{step}</p>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductHeader({
   health,
   healthOk,
   user,
   onSignOut,
   onOpenSidebar,
+  onOpenHelp,
 }: {
   health: BackendHealth | null;
   healthOk: boolean;
   user: AuthUser;
   onSignOut: () => void;
   onOpenSidebar: () => void;
+  onOpenHelp: () => void;
 }) {
   return (
     <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
@@ -2465,7 +2848,7 @@ function ProductHeader({
             </span>
           </div>
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">xyfRAG 工作台</p>
+            <p className="truncate text-sm font-semibold">{PRODUCT_NAME} 工作台</p>
             <p className="truncate text-xs text-[var(--muted)]">可信知识库问答</p>
           </div>
         </div>
@@ -2475,10 +2858,10 @@ function ProductHeader({
             <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
             <span className="font-medium text-[var(--accent-strong)]">正常</span>
           </div>
-          <Button type="button" variant="ghost" size="icon" title="帮助" className="h-8 w-8">
+          <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-8 w-8" onClick={onOpenHelp}>
             <HelpCircle size={16} aria-hidden="true" />
           </Button>
-          <HealthPill ok={healthOk} label={health?.app ?? "xyfRAG"} />
+          <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
           <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
@@ -2536,10 +2919,18 @@ function VisualHero({
   );
 }
 
-function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
+function CompactDocumentRow({
+  document,
+  deleting = false,
+  onDelete,
+}: {
+  document: KnowledgeDocument;
+  deleting?: boolean;
+  onDelete?: () => void;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-white px-3 py-2.5 shadow-sm">
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--accent-tint)] text-[var(--accent-strong)]">
           <FileText size={16} aria-hidden="true" />
         </div>
@@ -2550,7 +2941,27 @@ function CompactDocumentRow({ document }: { document: KnowledgeDocument }) {
           </p>
         </div>
       </div>
-      <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+      <div className="flex shrink-0 items-center gap-2">
+        <StatusChip label={document.status === "indexed" ? "已入库" : "待索引"} tone={document.status === "indexed" ? "ok" : "muted"} />
+        {onDelete ? (
+          <Button
+            type="button"
+            variant="danger"
+            size="icon"
+            className="h-8 w-8"
+            onClick={onDelete}
+            disabled={deleting}
+            title={`删除 ${document.title}`}
+            aria-label={`删除 ${document.title}`}
+          >
+            {deleting ? (
+              <Loader2 className="animate-spin" size={14} aria-hidden="true" />
+            ) : (
+              <Trash2 size={14} aria-hidden="true" />
+            )}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -3050,6 +3461,12 @@ function Composer({
           </Button>
         </div>
       </div>
+      <p className="mx-auto mt-2 max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm">
+        遇到无法解决的问题，请联系管理员：
+        <a className="font-medium text-[var(--accent-strong)] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
+          {ADMIN_CONTACT_EMAIL}
+        </a>
+      </p>
     </form>
   );
 }

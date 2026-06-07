@@ -59,7 +59,6 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     global TEST_OPS_DB
     TEST_OPS_DB = settings.paths.ops_db
     monkeypatch.setattr(api, "get_settings", lambda: settings)
-    monkeypatch.delenv("AUTH_DEV_CODE", raising=False)
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn")
     monkeypatch.setenv("ADMIN_EMAILS", "admin@zju.edu.cn")
 
@@ -92,13 +91,13 @@ def test_email_code_message_contains_html_and_text() -> None:
         "noreply@example.com",
     )
 
-    assert message["Subject"] == "847265 是你的 xyfRAG 验证码"
+    assert message["Subject"] == "847265 是你的 Maverella 验证码"
     assert message.get_content_type() == "multipart/alternative"
     parts = {part.get_content_type(): part.get_content() for part in message.iter_parts()}
     assert "847265" in parts["text/plain"]
-    assert "注册 xyfRAG 账号" in parts["text/plain"]
+    assert "注册 Maverella 账号" in parts["text/plain"]
     assert "847265" in parts["text/html"]
-    assert "注册 xyfRAG 账号" in parts["text/html"]
+    assert "注册 Maverella 账号" in parts["text/html"]
 
 
 def test_health_endpoint() -> None:
@@ -208,6 +207,45 @@ def test_email_auth_register_login_and_reset() -> None:
         assert new_login.status_code == 200
 
 
+def test_user_profile_update_saves_avatar_and_rejects_invalid_format() -> None:
+    avatar = "data:image/png;base64,aGVsbG8="
+
+    with TestClient(app) as client:
+        assert client.post("/api/v1/auth/register/start", json={"email": "profile@zju.edu.cn"}).status_code == 200
+        registered = client.post(
+            "/api/v1/auth/register/verify",
+            json={
+                "email": "profile@zju.edu.cn",
+                "password": "password123",
+                "code": latest_email_code("profile@zju.edu.cn", "register"),
+                "name": "原昵称",
+            },
+        )
+        assert registered.status_code == 200
+        user = registered.json()["user"]
+
+        update_response = client.patch(
+            f"/api/v1/auth/users/{user['id']}/profile",
+            json={"name": "新昵称", "avatar_url": avatar},
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["user"]
+        assert updated["name"] == "新昵称"
+        assert updated["avatar_url"] == avatar
+
+        list_response = client.get("/api/v1/auth/users")
+        assert list_response.status_code == 200
+        listed = next(item for item in list_response.json()["users"] if item["id"] == user["id"])
+        assert listed["name"] == "新昵称"
+        assert listed["avatar_url"] == avatar
+
+        invalid_response = client.patch(
+            f"/api/v1/auth/users/{user['id']}/profile",
+            json={"name": "新昵称", "avatar_url": "data:image/gif;base64,aGVsbG8="},
+        )
+        assert invalid_response.status_code == 400
+
+
 def test_admin_email_gets_admin_role() -> None:
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register/start", json={"email": "admin@zju.edu.cn"}).status_code == 200
@@ -224,7 +262,6 @@ def test_admin_email_gets_admin_role() -> None:
 
     assert response.status_code == 200
     assert response.json()["user"]["role"] == "admin"
-
 
 def test_admin_can_list_users_and_assign_roles() -> None:
     with TestClient(app) as client:

@@ -4,7 +4,6 @@ import Image from "next/image";
 import { FormEvent, useState } from "react";
 import {
   ArrowRight,
-  BookOpenText,
   Building2,
   CheckCircle2,
   Eye,
@@ -32,6 +31,7 @@ const STATUS_PILLS = [
   { label: "ZJU Email", icon: Mail },
   { label: "Verified Access", icon: ShieldCheck },
 ];
+const PRODUCT_NAME = "Maverella";
 
 export function LoginScreen() {
   const auth = useAuth();
@@ -171,7 +171,7 @@ export function LoginScreen() {
                       <Field
                         id="auth-name"
                         label="昵称"
-                        icon={BookOpenText}
+                        icon={Building2}
                         compact={dense}
                         value={name}
                         onChange={setName}
@@ -379,16 +379,19 @@ function ModeAction({
 function BrandHeader({ compact = false }: { compact?: boolean }) {
   return (
     <div className={cn("flex items-center gap-4 sm:gap-5", compact && "gap-3 sm:gap-4")}>
-      <div
+      <Image
+        src="/images/icon.png"
+        alt=""
+        width={72}
+        height={72}
         className={cn(
-          "flex shrink-0 items-center justify-center rounded-[16px] bg-[#1b8279] text-white shadow-[0_16px_36px_rgba(22,115,109,0.28),inset_0_1px_0_rgba(255,255,255,0.26)] sm:rounded-[18px]",
+          "shrink-0 object-cover shadow-[0_16px_36px_rgba(22,115,109,0.22)]",
           compact
-            ? "h-[clamp(2.6rem,5vh,3.25rem)] w-[clamp(2.6rem,5vh,3.25rem)]"
-            : "h-[clamp(3.25rem,7vh,4rem)] w-[clamp(3.25rem,7vh,4rem)]",
+            ? "h-[clamp(2.6rem,5vh,3.25rem)] w-[clamp(2.6rem,5vh,3.25rem)] rounded-[16px]"
+            : "h-[clamp(3.25rem,7vh,4rem)] w-[clamp(3.25rem,7vh,4rem)] rounded-[18px]",
         )}
-      >
-        <BookOpenText size={compact ? 22 : 26} aria-hidden="true" />
-      </div>
+        aria-hidden="true"
+      />
       <div className="min-w-0">
         <h1
           className={cn(
@@ -396,7 +399,7 @@ function BrandHeader({ compact = false }: { compact?: boolean }) {
             compact ? "text-[clamp(1.05rem,1.25vw,1.25rem)]" : "text-[clamp(1.25rem,1.6vw,1.5rem)]",
           )}
         >
-          xyfRAG
+          {PRODUCT_NAME}
         </h1>
         <p className={cn("mt-1 text-[#667287]", compact ? "text-sm leading-5" : "text-[clamp(0.95rem,1.15vw,1.125rem)] leading-6")}>
           可信知识问答平台

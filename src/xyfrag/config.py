@@ -1,4 +1,4 @@
-"""Configuration loading utilities for xyfRAG."""
+"""Configuration loading utilities for Maverella."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class AppConfig(BaseModel):
     """Application server settings."""
 
-    name: str = "xyfRAG"
+    name: str = "Maverella"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -31,7 +31,7 @@ class PathConfig(BaseModel):
     knowledge_bases_dir: Path = Path("data/knowledge_bases")
     knowledge_models_dir: Path = Path("models/knowledge_bases")
     ops_db: Path = Path("data/ops.sqlite3")
-    log_file: Path = Path("logs/xyfrag.log")
+    log_file: Path = Path("logs/maverella.log")
 
 
 class BoundaryClassifierConfig(BaseModel):
@@ -114,7 +114,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _project_path(path: Path) -> Path:
-    """Resolve a path relative to the xyfRAG project root.
+    """Resolve a path relative to the Maverella project root.
 
     Args:
         path: User configured path.
