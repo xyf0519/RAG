@@ -100,17 +100,17 @@ export function LoginScreen() {
   }
 
   return (
-    <main className="relative h-screen overflow-hidden bg-[#f7f9f8] text-[#0f172a]">
+    <main className="auth-mobile-page relative h-[100svh] overflow-y-auto bg-[#f7f9f8] text-[#0f172a] lg:h-screen lg:overflow-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(255,255,255,0.98),transparent_36%),radial-gradient(circle_at_82%_88%,rgba(0,108,99,0.10),transparent_32%)]" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-white/80 blur-2xl" />
 
-      <div className="relative mx-auto flex h-screen w-full max-w-[1760px] items-center px-4 py-4 sm:px-6 lg:px-8">
-        <div className="grid h-[calc(100svh-2rem)] min-h-0 w-full overflow-hidden rounded-[32px] border border-white/80 bg-white/72 shadow-[0_32px_100px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.95)] backdrop-blur-2xl sm:rounded-[40px] lg:grid-cols-[minmax(390px,0.78fr)_minmax(560px,1.22fr)]">
+      <div className="relative mx-auto flex min-h-full w-full max-w-[1760px] items-start px-3 pb-[calc(env(safe-area-inset-bottom)+24px)] pt-[calc(env(safe-area-inset-top)+18px)] sm:px-6 lg:h-screen lg:items-center lg:px-8 lg:py-4">
+        <div className="grid min-h-0 w-full overflow-visible rounded-[28px] border border-white/80 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.11),inset_0_1px_0_rgba(255,255,255,0.95)] backdrop-blur-2xl sm:rounded-[40px] lg:h-[calc(100svh-2rem)] lg:overflow-hidden lg:bg-white/72 lg:shadow-[0_32px_100px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.95)] lg:grid-cols-[minmax(390px,0.78fr)_minmax(560px,1.22fr)]">
           <section
             className={cn(
-              "flex min-h-0 flex-col px-6 sm:px-9",
+              "flex min-h-0 flex-col px-5 sm:px-9",
               dense
-                ? "py-3 lg:px-[clamp(2rem,3.2vw,3.8rem)] lg:py-4"
+                ? "py-4 lg:px-[clamp(2rem,3.2vw,3.8rem)] lg:py-4"
                 : "py-5 sm:py-7 lg:px-[clamp(2.2rem,3.8vw,4.4rem)] lg:py-[clamp(1rem,2.4vh,2.5rem)]",
             )}
           >
@@ -119,7 +119,7 @@ export function LoginScreen() {
             <div
               className={cn(
                 "flex min-h-0 flex-1 flex-col",
-                dense ? "justify-start pt-2" : "justify-center py-[clamp(0.4rem,1.4vh,1.4rem)]",
+                dense ? "justify-start pt-4 lg:pt-2" : "justify-start py-6 lg:justify-center lg:py-[clamp(0.4rem,1.4vh,1.4rem)]",
               )}
             >
               <div className="max-w-[620px]">
@@ -135,13 +135,13 @@ export function LoginScreen() {
 
                 <h2 className={cn(
                   "font-semibold leading-[1.02] tracking-normal text-[#060b1a]",
-                  dense ? "text-[clamp(1.8rem,2.7vw,2.85rem)]" : "text-[clamp(2.25rem,3.7vw,4.05rem)]",
+                  dense ? "text-[2rem] lg:text-[clamp(1.8rem,2.7vw,2.85rem)]" : "text-[2.55rem] lg:text-[clamp(2.25rem,3.7vw,4.05rem)]",
                 )}>
                   {title}
                 </h2>
                 <p className={cn(
-                  "max-w-[580px] text-[clamp(0.95rem,1vw,1.08rem)] leading-7 text-[#58667a]",
-                  dense ? "mt-1.5 line-clamp-1 text-sm leading-5" : "mt-[clamp(0.65rem,1.4vh,1rem)]",
+                  "max-w-[580px] text-base leading-7 text-[#58667a] lg:text-[clamp(0.95rem,1vw,1.08rem)]",
+                  dense ? "mt-2 text-sm leading-5 lg:mt-1.5 lg:line-clamp-1" : "mt-3 lg:mt-[clamp(0.65rem,1.4vh,1rem)]",
                 )}>
                   使用 @zju.edu.cn 邮箱登录，进入可信问答与知识库管理空间。
                 </p>
@@ -149,11 +149,11 @@ export function LoginScreen() {
                 <form
                   onSubmit={submit}
                   className={cn(
-                    "max-w-[580px] rounded-[24px] border border-white/80 bg-white/78 shadow-[0_24px_70px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.95)] backdrop-blur-2xl",
-                    dense ? "mt-3 p-4" : "mt-[clamp(1rem,2vh,1.75rem)] p-[clamp(1rem,1.85vw,1.5rem)]",
+                    "max-w-[580px] rounded-[24px] border border-white/80 bg-white/82 shadow-[0_18px_50px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)] backdrop-blur-2xl lg:bg-white/78 lg:shadow-[0_24px_70px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.95)]",
+                    dense ? "mt-4 p-4" : "mt-5 p-4 lg:mt-[clamp(1rem,2vh,1.75rem)] lg:p-[clamp(1rem,1.85vw,1.5rem)]",
                   )}
                 >
-                  <div className={cn("grid", dense ? "gap-2.5" : "gap-[clamp(0.7rem,1.4vh,1rem)]")}>
+                  <div className={cn("grid", dense ? "gap-3" : "gap-4 lg:gap-[clamp(0.7rem,1.4vh,1rem)]")}>
                     <Field
                       id="auth-email"
                       label="浙大邮箱"
@@ -246,7 +246,7 @@ export function LoginScreen() {
                       disabled={submitting}
                       className={cn(
                         "group relative mt-1 flex items-center justify-center overflow-hidden rounded-[17px] bg-[#1b8279] px-6 font-semibold text-white shadow-[0_18px_45px_rgba(22,115,109,0.30),inset_0_1px_0_rgba(255,255,255,0.28)] transition duration-300 hover:-translate-y-0.5 hover:bg-[#15746d] disabled:pointer-events-none disabled:opacity-60",
-                        dense ? "h-12 text-base" : "h-[clamp(3rem,5.2vh,3.6rem)] text-lg",
+                        dense ? "h-12 text-base" : "h-[3.25rem] min-h-[3.25rem] text-lg lg:h-[clamp(3rem,5.2vh,3.6rem)]",
                       )}
                     >
                       <span className="absolute inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,0.22),transparent_34%,rgba(255,255,255,0.16)_72%,transparent)] opacity-0 transition duration-500 group-hover:opacity-100" />

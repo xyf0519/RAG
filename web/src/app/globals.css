@@ -220,6 +220,11 @@ input:focus-visible {
     padding-bottom: 0;
   }
 
+  .auth-mobile-page {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
   textarea,
   input {
     font-size: 16px;
