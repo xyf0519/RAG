@@ -120,13 +120,15 @@ def test_knowledge_base_management_endpoints() -> None:
         list_response = client.get("/api/v1/knowledge-bases")
         assert list_response.status_code == 200
         assert any(item["id"] == knowledge_base["id"] for item in list_response.json())
+        assert knowledge_base["boundary_classifier_enabled"] is True
 
         patch_response = client.patch(
             f"/api/v1/knowledge-bases/{knowledge_base['id']}",
-            json={"status": "disabled"},
+            json={"status": "disabled", "boundary_classifier_enabled": False},
         )
         assert patch_response.status_code == 200
         assert patch_response.json()["status"] == "disabled"
+        assert patch_response.json()["boundary_classifier_enabled"] is False
 
         file_response = client.post(
             f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",

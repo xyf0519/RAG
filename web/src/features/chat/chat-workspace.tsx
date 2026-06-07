@@ -84,6 +84,7 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
   name: "默认校园资料库",
   description: "默认知识库",
   status: "active",
+  boundary_classifier_enabled: true,
   document_count: 0,
   index_status: "not_indexed",
   last_indexed_at: null,
@@ -96,6 +97,7 @@ const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
 const PRODUCT_NAME = "Maverella";
 const ADMIN_CONTACT_EMAIL = "xinyufei@zju.edu.cn";
+const DISABLED_BOUNDARY_MODEL_ID = "__boundary_model_disabled__";
 
 const MOBILE_TABS = [
   { id: "chat", label: "对话", icon: MessageSquareText },
@@ -555,12 +557,19 @@ function KnowledgeAddWorkspace({
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [savingBoundaryModel, setSavingBoundaryModel] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
-  const visibleKnowledgeBases = knowledgeBases.slice(0, 5);
-  const selectedClassifierModel =
+  const classifierModelCandidate =
     classifierModels.find((model) => model.id === selectedClassifierModelId) ?? classifierModels[0] ?? null;
+  const boundaryModelDisabled =
+    selectedKnowledgeBase.boundary_classifier_enabled === false ||
+    (savingBoundaryModel && selectedClassifierModelId === DISABLED_BOUNDARY_MODEL_ID);
+  const selectedClassifierModel = boundaryModelDisabled ? null : classifierModelCandidate;
+  const selectedBoundaryModelValue = boundaryModelDisabled
+    ? DISABLED_BOUNDARY_MODEL_ID
+    : selectedClassifierModel?.id ?? "";
   const selectedClassifierMetrics = parseClassifierModelMetrics(selectedClassifierModel?.metrics_json);
 
   const refreshDocuments = useCallback(async () => {
@@ -736,24 +745,69 @@ function KnowledgeAddWorkspace({
     }
   }
 
+  async function changeBoundaryModel(value: string) {
+    if (value === DISABLED_BOUNDARY_MODEL_ID) {
+      setSavingBoundaryModel(true);
+      try {
+        const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ boundary_classifier_enabled: false }),
+        });
+        if (!response.ok) {
+          throw new Error(await readResponseError(response, "边界模型更新失败。"));
+        }
+        setSelectedClassifierModelId(DISABLED_BOUNDARY_MODEL_ID);
+        onNotice("边界模型已禁用。");
+        await onRefresh();
+      } catch (error) {
+        onNotice(error instanceof Error ? error.message : "边界模型更新失败。");
+      } finally {
+        setSavingBoundaryModel(false);
+      }
+      return;
+    }
+
+    setSelectedClassifierModelId(value);
+    if (boundaryModelDisabled) {
+      setSavingBoundaryModel(true);
+      try {
+        const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ boundary_classifier_enabled: true }),
+        });
+        if (!response.ok) {
+          throw new Error(await readResponseError(response, "边界模型更新失败。"));
+        }
+        onNotice("边界模型已启用。");
+        await onRefresh();
+      } catch (error) {
+        onNotice(error instanceof Error ? error.message : "边界模型更新失败。");
+      } finally {
+        setSavingBoundaryModel(false);
+      }
+    }
+  }
+
   return (
     <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
       <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_300px]">
-        <div className="grid min-h-0 grid-rows-[176px_minmax(0,1fr)] gap-4">
+        <div className="grid h-full min-h-0 grid-rows-[176px_minmax(0,1fr)] gap-4">
           <VisualHero
             image={KNOWLEDGE_VISUAL_SRC}
             eyebrow="Knowledge"
             title="添加知识库"
             description="创建资料空间，上传文档并构建索引。"
           />
-          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+          <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
             <CardHeader className="shrink-0">
               <h2 className="text-sm font-semibold">知识库</h2>
               <p className="text-xs text-[var(--muted)]">{knowledgeBases.length} 个空间</p>
             </CardHeader>
-            <CardContent className="min-h-0 overflow-hidden">
+            <CardContent className="min-h-0 flex-1 overflow-y-auto">
               <div className="space-y-2">
-                {visibleKnowledgeBases.map((knowledgeBase) => (
+                {knowledgeBases.map((knowledgeBase) => (
                   <button
                     key={knowledgeBase.id}
                     type="button"
@@ -777,17 +831,12 @@ function KnowledgeAddWorkspace({
                     </div>
                   </button>
                 ))}
-                {knowledgeBases.length > visibleKnowledgeBases.length ? (
-                  <p className="px-1 text-xs text-[var(--muted)]">
-                    还有 {knowledgeBases.length - visibleKnowledgeBases.length} 个知识库
-                  </p>
-                ) : null}
               </div>
             </CardContent>
           </Card>
         </div>
 
-        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardContent className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
               <input
@@ -809,7 +858,7 @@ function KnowledgeAddWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="min-h-0 overflow-hidden shadow-[var(--shadow-soft)]">
+          <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
             <CardHeader className="shrink-0">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -828,7 +877,7 @@ function KnowledgeAddWorkspace({
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid min-h-0 grid-rows-[210px_minmax(0,1fr)] gap-3">
+            <CardContent className="grid min-h-0 flex-1 grid-rows-[210px_minmax(0,1fr)] gap-3">
               <div
                 onDragOver={(event) => event.preventDefault()}
                 onDragEnter={(event) => {
@@ -869,7 +918,7 @@ function KnowledgeAddWorkspace({
                 </div>
               </div>
 
-              <div className="min-h-0 overflow-y-auto pr-1">
+              <div className="min-h-0 overflow-y-auto overscroll-contain pr-1">
                 <div className="space-y-2">
                   {documents.length ? documents.map((document) => (
                     <CompactDocumentRow
@@ -917,48 +966,54 @@ function KnowledgeAddWorkspace({
               <h2 className="text-sm font-semibold">边界模型</h2>
             </CardHeader>
             <CardContent className="space-y-3 px-4 pb-4 pt-3">
-              {classifierModels.length ? (
-                <>
-                  <select
-                    id="knowledge-model-select"
-                    value={selectedClassifierModel?.id ?? ""}
-                    onChange={(event) => setSelectedClassifierModelId(event.target.value)}
-                    className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)]"
-                  >
-                    {classifierModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name} · v{model.version}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedClassifierModel ? (
-                    <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-2.5 shadow-sm">
-                      <div className="relative flex items-center gap-3">
-                        <div className="boundary-model-orb flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
-                          <BrainCircuit size={17} aria-hidden="true" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{selectedClassifierModel.name}</p>
-                          <p className="mt-1 text-xs text-[var(--muted)]">
-                            {classifierScopeLabel(selectedClassifierModel.scope)} · {classifierStatusLabel(selectedClassifierModel.status)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="relative mt-2 grid grid-cols-2 gap-2 text-xs">
-                        <StateRow label="准确率" value={formatMetricPercent(selectedClassifierMetrics.accuracy)} />
-                        <StateRow label="样本" value={`${selectedClassifierMetrics.sample_count ?? "-"}`} />
-                      </div>
-                      <div className="relative mt-2 flex flex-wrap gap-1.5">
-                        <span className="rounded-full border border-[var(--accent-soft)] bg-white/80 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-strong)]">
-                          @{selectedClassifierModel.alias}
-                        </span>
-                        <span className="rounded-full border border-[var(--border)] bg-white/80 px-2 py-0.5 text-[11px] text-[var(--muted)]">
-                          {formatTimestamp(selectedClassifierModel.created_at)}
-                        </span>
-                      </div>
+              <select
+                id="knowledge-model-select"
+                value={selectedBoundaryModelValue}
+                onChange={(event) => void changeBoundaryModel(event.target.value)}
+                disabled={savingBoundaryModel}
+                className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)] disabled:opacity-60"
+              >
+                {!classifierModels.length && !boundaryModelDisabled ? <option value="">暂无可用模型</option> : null}
+                <option value={DISABLED_BOUNDARY_MODEL_ID}>禁用边界模型</option>
+                {classifierModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} · v{model.version}
+                  </option>
+                ))}
+              </select>
+              {boundaryModelDisabled ? (
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-muted)] p-4 text-sm text-[var(--muted)]">
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--muted)] shadow-sm">
+                    {savingBoundaryModel ? <Loader2 className="animate-spin" size={16} aria-hidden="true" /> : <BrainCircuit size={16} aria-hidden="true" />}
+                  </div>
+                  边界模型已禁用，问答将直接进入检索流程。
+                </div>
+              ) : selectedClassifierModel ? (
+                <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-2.5 shadow-sm">
+                  <div className="relative flex items-center gap-3">
+                    <div className="boundary-model-orb flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
+                      <BrainCircuit size={17} aria-hidden="true" />
                     </div>
-                  ) : null}
-                </>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{selectedClassifierModel.name}</p>
+                      <p className="mt-1 text-xs text-[var(--muted)]">
+                        {classifierScopeLabel(selectedClassifierModel.scope)} · {classifierStatusLabel(selectedClassifierModel.status)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="relative mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <StateRow label="准确率" value={formatMetricPercent(selectedClassifierMetrics.accuracy)} />
+                    <StateRow label="样本" value={`${selectedClassifierMetrics.sample_count ?? "-"}`} />
+                  </div>
+                  <div className="relative mt-2 flex flex-wrap gap-1.5">
+                    <span className="rounded-full border border-[var(--accent-soft)] bg-white/80 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-strong)]">
+                      @{selectedClassifierModel.alias}
+                    </span>
+                    <span className="rounded-full border border-[var(--border)] bg-white/80 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                      {formatTimestamp(selectedClassifierModel.created_at)}
+                    </span>
+                  </div>
+                </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--panel-muted)] p-4 text-sm text-[var(--muted)]">
                   <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--accent-strong)] shadow-sm">
@@ -3435,7 +3490,7 @@ function Composer({
   onSubmit: (event: FormEvent) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="shrink-0 px-4 pb-4">
+    <form onSubmit={onSubmit} className="shrink-0 px-4 pb-3">
       <div className="mx-auto max-w-3xl rounded-[26px] border border-white/80 bg-white/88 p-3 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-xl transition focus-within:border-white focus-within:bg-white focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)]">
         <textarea
           value={input}
@@ -3461,9 +3516,9 @@ function Composer({
           </Button>
         </div>
       </div>
-      <p className="mx-auto mt-2 max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm">
+      <p className="mx-auto mt-1 max-w-3xl px-2 text-center text-[10px] leading-4 text-slate-400">
         遇到无法解决的问题，请联系管理员：
-        <a className="font-medium text-[var(--accent-strong)] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
+        <a className="font-medium text-slate-500 hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
           {ADMIN_CONTACT_EMAIL}
         </a>
       </p>

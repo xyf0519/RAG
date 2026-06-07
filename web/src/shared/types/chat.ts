@@ -112,6 +112,7 @@ export type KnowledgeBase = {
   name: string;
   description: string;
   status: "active" | "disabled";
+  boundary_classifier_enabled: boolean;
   document_count: number;
   index_status: "not_indexed" | "pending" | "building" | "ready" | "failed";
   last_indexed_at?: number | null;

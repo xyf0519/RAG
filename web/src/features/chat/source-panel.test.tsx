@@ -77,6 +77,7 @@ describe("ChatWorkspace", () => {
               name: "默认校园资料库",
               description: "默认知识库",
               status: "active",
+              boundary_classifier_enabled: true,
               document_count: 3,
               index_status: "ready",
               last_indexed_at: null,

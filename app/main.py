@@ -147,6 +147,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = None
+    boundary_classifier_enabled: Optional[bool] = None
 
 
 class KnowledgeBaseResponse(BaseModel):
@@ -154,6 +155,7 @@ class KnowledgeBaseResponse(BaseModel):
     name: str
     description: str
     status: str
+    boundary_classifier_enabled: bool
     document_count: int
     index_status: str
     last_indexed_at: Optional[float] = None
@@ -682,6 +684,7 @@ async def update_knowledge_base(
             name=request.name,
             description=request.description,
             status=request.status,  # type: ignore[arg-type]
+            boundary_classifier_enabled=request.boundary_classifier_enabled,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="知识库不存在。") from exc

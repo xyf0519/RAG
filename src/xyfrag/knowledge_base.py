@@ -32,6 +32,7 @@ class KnowledgeBaseRecord:
     name: str
     description: str
     status: KnowledgeBaseStatus
+    boundary_classifier_enabled: bool
     document_count: int
     index_status: IndexStatus
     last_indexed_at: float | None
@@ -123,6 +124,7 @@ class KnowledgeBaseStore:
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
+                    boundary_classifier_enabled INTEGER NOT NULL DEFAULT 1,
                     document_count INTEGER NOT NULL DEFAULT 0,
                     index_status TEXT NOT NULL,
                     last_indexed_at REAL,
@@ -198,6 +200,14 @@ class KnowledgeBaseStore:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(knowledge_bases)").fetchall()
+            }
+            if "boundary_classifier_enabled" not in columns:
+                connection.execute(
+                    "ALTER TABLE knowledge_bases ADD COLUMN boundary_classifier_enabled INTEGER NOT NULL DEFAULT 1"
+                )
 
     def ensure_default_knowledge_base(self) -> KnowledgeBaseRecord:
         existing = self.get_knowledge_base(DEFAULT_KNOWLEDGE_BASE_ID)
@@ -238,16 +248,17 @@ class KnowledgeBaseStore:
             connection.execute(
                 """
                 INSERT INTO knowledge_bases (
-                    id, name, description, status, document_count,
+                    id, name, description, status, boundary_classifier_enabled, document_count,
                     index_status, last_indexed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     DEFAULT_KNOWLEDGE_BASE_ID,
                     "默认校园资料库",
                     "由现有 data/raw 资料迁移生成，可直接用于问答。",
                     "active",
+                    1,
                     document_count,
                     index_status,
                     now if index_status == "ready" else None,
@@ -288,10 +299,10 @@ class KnowledgeBaseStore:
             connection.execute(
                 """
                 INSERT INTO knowledge_bases (
-                    id, name, description, status, document_count,
+                    id, name, description, status, boundary_classifier_enabled, document_count,
                     index_status, last_indexed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 0, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, 1, 0, ?, NULL, ?, ?)
                 """,
                 (kb_id, name.strip(), description.strip(), "active", "not_indexed", now, now),
             )
@@ -303,19 +314,29 @@ class KnowledgeBaseStore:
         name: str | None = None,
         description: str | None = None,
         status: KnowledgeBaseStatus | None = None,
+        boundary_classifier_enabled: bool | None = None,
     ) -> KnowledgeBaseRecord:
         existing = self.require_knowledge_base(knowledge_base_id)
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
                 UPDATE knowledge_bases
-                SET name = ?, description = ?, status = ?, updated_at = ?
+                SET name = ?,
+                    description = ?,
+                    status = ?,
+                    boundary_classifier_enabled = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     name.strip() if name is not None else existing.name,
                     description.strip() if description is not None else existing.description,
                     status or existing.status,
+                    int(
+                        existing.boundary_classifier_enabled
+                        if boundary_classifier_enabled is None
+                        else boundary_classifier_enabled
+                    ),
                     time.time(),
                     knowledge_base_id,
                 ),
@@ -770,10 +791,14 @@ class KnowledgeBaseStore:
         return KnowledgeIndex.load(self.index_dir(knowledge_base_id))
 
     def settings_for(self, knowledge_base_id: str) -> Settings:
+        knowledge_base = self.require_knowledge_base(knowledge_base_id)
         settings = self._settings.model_copy(deep=True)
         settings.paths.raw_docs_dir = self.raw_dir(knowledge_base_id)
         settings.paths.index_dir = self.index_dir(knowledge_base_id)
         settings.paths.classifier_dir = self.classifier_dir(knowledge_base_id)
+        settings.boundary_classifier.enabled = (
+            settings.boundary_classifier.enabled and knowledge_base.boundary_classifier_enabled
+        )
         return settings
 
     def raw_dir(self, knowledge_base_id: str) -> Path:
@@ -798,6 +823,7 @@ class KnowledgeBaseStore:
             name=str(row["name"]),
             description=str(row["description"]),
             status=row["status"],
+            boundary_classifier_enabled=bool(row["boundary_classifier_enabled"]),
             document_count=int(row["document_count"]),
             index_status=row["index_status"],
             last_indexed_at=row["last_indexed_at"],
@@ -903,6 +929,14 @@ class KnowledgeBaseStore:
                 WHERE knowledge_base_id = ? AND status = ?
                 """,
                 ("archived", knowledge_base_id, "ready"),
+            )
+            connection.execute(
+                """
+                UPDATE knowledge_bases
+                SET boundary_classifier_enabled = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (1, now, knowledge_base_id),
             )
             row = connection.execute(
                 """
