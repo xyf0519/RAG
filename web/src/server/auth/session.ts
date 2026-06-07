@@ -26,6 +26,9 @@ export type AuthResult =
   | { ok: false; response: NextResponse };
 
 export function getAuthSecret() {
+  if (process.env.XYFRAG_ENV === "production" && !process.env.AUTH_SECRET) {
+    throw new Error("AUTH_SECRET must be set when XYFRAG_ENV=production.");
+  }
   return process.env.AUTH_SECRET ?? "xyfrag-dev-auth-secret-change-me";
 }
 
@@ -68,7 +71,7 @@ export function setSessionCookie(response: NextResponse, userId: string) {
     value: signSession(userId),
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureSessionCookie(),
     maxAge: SESSION_MAX_AGE_SECONDS,
     path: "/",
   });
@@ -80,10 +83,21 @@ export function clearSessionCookie(response: NextResponse) {
     value: "",
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureSessionCookie(),
     maxAge: 0,
     path: "/",
   });
+}
+
+function shouldUseSecureSessionCookie() {
+  const configured = process.env.SESSION_COOKIE_SECURE?.toLowerCase();
+  if (configured === "true") {
+    return true;
+  }
+  if (configured === "false") {
+    return false;
+  }
+  return process.env.NODE_ENV === "production";
 }
 
 export async function getCurrentUser(request?: NextRequest): Promise<AuthUser | null> {

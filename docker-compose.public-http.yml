@@ -1,0 +1,74 @@
+services:
+  backend:
+    image: rag-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.runtime
+      args:
+        BACKEND_BASE_IMAGE: ${BACKEND_BASE_IMAGE:-rag-backend-base:latest}
+    restart: unless-stopped
+    environment:
+      XYFRAG_ENV: ${XYFRAG_ENV:-staging}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+      ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-zju.edu.cn}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURITY: ${SMTP_SECURITY:-ssl}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./config/settings.yaml:/app/config/settings.yaml:ro
+      - ${XYFRAG_DATA_DIR:?set XYFRAG_DATA_DIR}:/app/data
+      - ${XYFRAG_MODELS_DIR:?set XYFRAG_MODELS_DIR}:/app/models
+      - ${XYFRAG_LOGS_DIR:?set XYFRAG_LOGS_DIR}:/app/logs
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  web:
+    image: rag-web:latest
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-docker.m.daocloud.io/library/node:24-slim}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      XYFRAG_ENV: ${XYFRAG_ENV:-staging}
+      RAG_BACKEND_URL: http://backend:8000
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    depends_on:
+      backend:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  nginx:
+    image: ${NGINX_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine}
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-_}
+    volumes:
+      - ./deploy/nginx.aliyun.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
