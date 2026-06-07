@@ -33,6 +33,7 @@ html,
 body {
   min-height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -168,6 +169,7 @@ input:focus-visible {
 
 .chat-scroll {
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .chat-scroll::-webkit-scrollbar-thumb {
@@ -196,6 +198,31 @@ input:focus-visible {
 
   .product-sidebar--collapsed {
     width: 64px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .mobile-chat-shell {
+    min-height: 0;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 48%, #dfeffd 100%);
+  }
+
+  .mobile-chat-scroll {
+    scroll-padding-bottom: 144px;
+  }
+
+  .mobile-composer {
+    background:
+      linear-gradient(180deg, rgba(247, 251, 253, 0) 0%, rgba(247, 251, 253, 0.92) 34%, rgba(247, 251, 253, 0.98) 100%);
+  }
+
+  .product-sidebar {
+    padding-bottom: 0;
+  }
+
+  textarea,
+  input {
+    font-size: 16px;
   }
 }
 

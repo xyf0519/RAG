@@ -19,6 +19,7 @@ import {
   LogOut,
   Menu,
   MessageSquareText,
+  Mic,
   PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
@@ -287,7 +288,7 @@ export function ChatWorkspace() {
   }
 
   return (
-    <main className="h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+    <main className="h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)] lg:h-screen">
       <div className="flex h-full min-h-0">
         <ProductSidebar
           open={sidebarOpen}
@@ -295,8 +296,11 @@ export function ChatWorkspace() {
           sessionId={chat.sessionId}
           latestQuestion={latestQuestion?.content}
           sessions={chat.sessions}
+          knowledgeBases={knowledgeBases}
+          selectedKnowledgeBaseId={selectedKnowledgeBase.id}
           onNewSession={startNewSession}
           onOpenSession={openStoredSession}
+          onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
           user={auth.user}
           isAdmin={auth.isAdmin}
           activeView={workspaceView}
@@ -339,6 +343,7 @@ export function ChatWorkspace() {
             <ChatWorkspaceView
               chat={chat}
               input={input}
+              user={auth.user}
               mobileTab={mobileTab}
               currentSources={currentSources}
               knowledgeBases={knowledgeBases}
@@ -373,6 +378,7 @@ export function ChatWorkspace() {
 function ChatWorkspaceView({
   chat,
   input,
+  user,
   mobileTab,
   currentSources,
   knowledgeBases,
@@ -392,6 +398,7 @@ function ChatWorkspaceView({
 }: {
   chat: ReturnType<typeof useRagChatStream>;
   input: string;
+  user: AuthUser;
   mobileTab: MobileTab;
   currentSources: Source[];
   knowledgeBases: KnowledgeBase[];
@@ -415,19 +422,19 @@ function ChatWorkspaceView({
   onToggleFavorite: (messageId: string) => void;
 }) {
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <div className="mobile-chat-shell relative min-h-0 flex-1 overflow-hidden">
       <Image src={CHAT_BACKGROUND_SRC} alt="" fill priority sizes="100vw" className="object-cover opacity-70" />
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(249,251,252,0.72)_0%,rgba(245,249,250,0.90)_62%,rgba(245,249,250,0.96)_100%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(248,252,253,0.92)_54%,rgba(222,239,254,0.90)_100%)] lg:bg-[linear-gradient(180deg,rgba(249,251,252,0.72)_0%,rgba(245,249,250,0.90)_62%,rgba(245,249,250,0.96)_100%)]" />
       <div
         className={cn(
-          "relative grid h-full min-h-0 grid-cols-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:gap-4 lg:px-5 lg:py-4",
+          "relative grid h-full min-h-0 grid-cols-1 overflow-hidden px-0 py-0 lg:gap-4 lg:px-5 lg:py-4",
           sourcesCollapsed
             ? "lg:grid-cols-[minmax(0,1fr)_56px]"
             : "lg:grid-cols-[minmax(0,1fr)_392px]",
         )}
       >
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/70 bg-white/62 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
-          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
+        <section className="mobile-chat-panel relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-white/0 lg:rounded-2xl lg:border lg:border-white/70 lg:bg-white/62 lg:shadow-[0_24px_80px_rgba(15,23,42,0.10)] lg:backdrop-blur-xl">
+          <div className="hidden h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4 lg:flex">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="truncate text-sm font-semibold">{PRODUCT_NAME}</h1>
@@ -455,11 +462,11 @@ function ChatWorkspaceView({
             </div>
           </div>
 
-          <div className="chat-scroll flex-1 overflow-y-auto px-4 py-6">
+          <div className="chat-scroll mobile-chat-scroll flex-1 overflow-y-auto px-4 pb-40 pt-5 sm:px-5 lg:px-4 lg:py-6">
             {chat.messages.length === 0 ? (
-              <EmptyState />
+              <EmptyState user={user} selectedKnowledgeBase={selectedKnowledgeBase} />
             ) : (
-              <div className="mx-auto max-w-3xl space-y-6">
+              <div className="mx-auto max-w-3xl space-y-5 lg:space-y-6">
                 {chat.messages.map((message) => (
                   <MessageBubble
                     key={message.id}
@@ -476,7 +483,7 @@ function ChatWorkspaceView({
           </div>
 
         {chat.lastError ? (
-          <div className="mx-4 mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
+          <div className="mx-4 mb-3 rounded-2xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)] lg:rounded-md">
             {chat.lastError.message}
           </div>
         ) : null}
@@ -500,7 +507,7 @@ function ChatWorkspaceView({
         )}
       </aside>
 
-      <section className="min-h-0 overflow-y-auto lg:hidden">
+      <section className="hidden min-h-0 overflow-y-auto lg:hidden">
         <div className="mb-3 grid grid-cols-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-1 shadow-sm">
           {MOBILE_TABS.map((tab) => {
             const Icon = tab.icon;
@@ -1871,8 +1878,11 @@ function ProductSidebar({
   sessionId,
   latestQuestion,
   sessions,
+  knowledgeBases,
+  selectedKnowledgeBaseId,
   onNewSession,
   onOpenSession,
+  onSelectKnowledgeBase,
   user,
   isAdmin,
   activeView,
@@ -1887,8 +1897,11 @@ function ProductSidebar({
   sessionId: string;
   latestQuestion?: string;
   sessions: ChatSessionSummary[];
+  knowledgeBases: KnowledgeBase[];
+  selectedKnowledgeBaseId: string;
   onNewSession: () => void;
   onOpenSession: (sessionId: string) => void;
+  onSelectKnowledgeBase: (knowledgeBaseId: string) => void;
   user: AuthUser;
   isAdmin: boolean;
   activeView: WorkspaceView;
@@ -1901,7 +1914,17 @@ function ProductSidebar({
   const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
   const [hoveringLogo, setHoveringLogo] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileKnowledgeBases = knowledgeBases.filter((item) => item.status === "active");
+  const selectableKnowledgeBases = mobileKnowledgeBases.length ? mobileKnowledgeBases : knowledgeBases;
+  const filteredSessions = sessions.filter((session) => {
+    const query = sessionSearch.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    return `${session.title} ${session.knowledgeBaseName ?? ""}`.toLowerCase().includes(query);
+  });
 
   useEffect(() => {
     if (!accountMenuOpen) {
@@ -1947,12 +1970,12 @@ function ProductSidebar({
       />
       <aside
         className={cn(
-          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-all duration-300 ease-out lg:relative lg:z-[90] lg:h-full lg:translate-x-0 lg:overflow-visible lg:shadow-none",
+          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-full max-w-[430px] flex-col overflow-hidden bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] transition-all duration-300 ease-out lg:relative lg:z-[90] lg:h-full lg:w-[292px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:border-r lg:border-[var(--border)] lg:bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] lg:shadow-none",
           collapsed ? "product-sidebar--collapsed" : "",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className={cn("flex h-16 shrink-0 items-center border-b border-[var(--border)] px-3", collapsed ? "lg:justify-center" : "justify-between")}>
+        <div className={cn("flex h-[92px] shrink-0 items-center px-5 pt-[env(safe-area-inset-top)] lg:h-16 lg:border-b lg:border-[var(--border)] lg:px-3 lg:pt-0", collapsed ? "lg:justify-center" : "justify-between")}>
           {collapsed ? (
             <button
               type="button"
@@ -1975,10 +1998,10 @@ function ProductSidebar({
             </button>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
-              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
+              <Image src="/images/icon.png" alt="" width={40} height={40} className="hidden h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10 lg:block" aria-hidden="true" />
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">{PRODUCT_NAME}</h2>
-                <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
+                <h2 className="truncate text-[30px] font-semibold tracking-normal text-slate-950 lg:text-base">{PRODUCT_NAME}</h2>
+                <p className="hidden truncate text-xs text-[var(--muted)] lg:block">产业级知识问答中枢</p>
               </div>
             </div>
           )}
@@ -1995,16 +2018,16 @@ function ProductSidebar({
           ) : null}
           <button
             type="button"
-            className="rounded-md p-2 text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-slate-100 transition hover:bg-[var(--panel-strong)] lg:hidden"
             onClick={onClose}
             aria-label="关闭导航"
           >
-            <X size={17} aria-hidden="true" />
+            <X size={24} strokeWidth={2.2} aria-hidden="true" />
           </button>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className={cn("shrink-0 px-3 py-3", collapsed ? "lg:px-2" : "")}>
+          <div className={cn("shrink-0 px-5 py-2 lg:px-3 lg:py-3", collapsed ? "lg:px-2" : "")}>
             {collapsed ? (
               <button
                 type="button"
@@ -2016,11 +2039,67 @@ function ProductSidebar({
                 <IconTooltip label="新建问答" />
               </button>
             ) : (
-              <Button type="button" variant="primary" className="w-full justify-center" onClick={onNewSession}>
-                <Plus size={15} aria-hidden="true" />
-                新建问答
+              <Button type="button" variant="ghost" className="h-16 w-full justify-start rounded-full bg-[#f1f1f1] px-6 text-[22px] font-medium text-slate-950 shadow-none hover:bg-[#ebebeb] lg:h-10 lg:justify-center lg:rounded-md lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)] lg:px-3 lg:text-sm lg:text-white lg:shadow-sm" onClick={onNewSession}>
+                <PenLine size={26} className="lg:hidden" aria-hidden="true" />
+                <Plus size={15} className="hidden lg:block" aria-hidden="true" />
+                <span className="lg:hidden">发起新对话</span>
+                <span className="hidden lg:inline">新建问答</span>
               </Button>
             )}
+
+            {!collapsed ? (
+              <div className="mt-4 space-y-1 lg:hidden">
+                <label className="flex h-14 items-center gap-5 rounded-full px-1 text-[22px] font-medium text-slate-950">
+                  <Search size={30} strokeWidth={2} aria-hidden="true" />
+                  <input
+                    value={sessionSearch}
+                    onChange={(event) => setSessionSearch(event.target.value)}
+                    className="min-w-0 flex-1 border-0 bg-transparent outline-none placeholder:text-slate-950"
+                    placeholder="搜索对话内容"
+                    aria-label="搜索对话内容"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => onChangeView("chat")}
+                  className="flex h-14 w-full items-center gap-5 rounded-full px-1 text-left text-[22px] font-medium text-slate-950"
+                >
+                  <Layers3 size={30} strokeWidth={2} aria-hidden="true" />
+                  库
+                </button>
+              </div>
+            ) : null}
+
+            {!collapsed && selectableKnowledgeBases.length ? (
+              <div className="mt-3 grid gap-2 lg:hidden">
+                {selectableKnowledgeBases.slice(0, 4).map((knowledgeBase) => {
+                  const active = knowledgeBase.id === selectedKnowledgeBaseId;
+                  return (
+                    <button
+                      key={knowledgeBase.id}
+                      type="button"
+                      onClick={() => {
+                        onSelectKnowledgeBase(knowledgeBase.id);
+                        onChangeView("chat");
+                        onClose();
+                      }}
+                      className={cn(
+                        "flex min-h-12 items-center justify-between gap-3 rounded-2xl px-4 py-2 text-left transition",
+                        active ? "bg-[var(--panel-strong)] text-slate-950" : "text-slate-600 hover:bg-[var(--panel-muted)]",
+                      )}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-base font-semibold">{knowledgeBase.name}</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          {knowledgeBase.document_count} 个文档
+                        </span>
+                      </span>
+                      {active ? <CheckCircle2 size={18} className="shrink-0 text-[var(--accent)]" aria-hidden="true" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
 
             <nav className={cn("space-y-1", collapsed ? "lg:mt-2" : "mt-5")}>
               {visibleNavItems.map((item) => {
@@ -2048,7 +2127,7 @@ function ProductSidebar({
                     type="button"
                     onClick={() => onChangeView(item.id)}
                     className={cn(
-                      "flex h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all",
+                      "hidden h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all lg:flex",
                       active
                         ? "border border-[var(--accent-soft)] bg-[linear-gradient(90deg,var(--accent-soft)_0%,rgba(255,255,255,0.72)_100%)] text-[var(--accent-strong)] shadow-sm"
                         : "text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]",
@@ -2069,8 +2148,8 @@ function ProductSidebar({
             </nav>
           </div>
 
-          <div className={cn("min-h-0 flex-1 overflow-y-auto px-3 pb-4", collapsed ? "lg:hidden" : "")}>
-            <div>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-8 lg:px-3 lg:pt-0", collapsed ? "lg:hidden" : "")}>
+            <div className="hidden lg:block">
               <div className="mb-2 flex items-center justify-between px-1">
                 <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">当前会话</h3>
                 <History size={14} className="text-[var(--muted)]" aria-hidden="true" />
@@ -2083,23 +2162,23 @@ function ProductSidebar({
               </div>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-5 lg:mt-5">
               <div className="mb-2 flex items-center justify-between px-1">
-                <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">历史会话</h3>
+                <h3 className="text-lg font-medium text-slate-400 lg:text-xs lg:font-semibold lg:uppercase lg:text-[var(--muted)]">最近</h3>
                 <Search size={14} className="text-[var(--muted)]" aria-hidden="true" />
               </div>
-              <div className="space-y-2">
-                {sessions.length ? sessions.map((session) => (
+              <div className="space-y-2 lg:space-y-2">
+                {filteredSessions.length ? filteredSessions.map((session) => (
                   <button
                     key={session.id}
                     type="button"
                     onClick={() => onOpenSession(session.id)}
-                    className="w-full rounded-md border border-[var(--border)] bg-white/72 px-3 py-2 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+                    className="w-full rounded-2xl bg-white px-0 py-2 text-left text-slate-950 transition hover:bg-[var(--panel-muted)] lg:rounded-md lg:border lg:border-[var(--border)] lg:bg-white/72 lg:px-3 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
                   >
-                    <span className="block truncate text-sm text-[var(--foreground)]">
+                    <span className="block truncate text-[22px] font-semibold lg:text-sm lg:font-normal lg:text-[var(--foreground)]">
                       {session.title}
                     </span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+                    <span className="mt-1 flex items-center justify-between gap-2 text-base text-slate-500 lg:text-xs lg:text-[var(--muted)]">
                       <span>{formatRelativeTime(session.updatedAt)}</span>
                       <span className="min-w-0 truncate">
                         {session.knowledgeBaseName ?? `${session.turnCount} 轮`}
@@ -2107,8 +2186,8 @@ function ProductSidebar({
                     </span>
                   </button>
                 )) : (
-                  <div className="rounded-lg border border-dashed border-[var(--border)] bg-white/58 px-3 py-4 text-sm text-[var(--muted)]">
-                    完成一次问答后，会话会自动保存在这里。
+                  <div className="rounded-2xl bg-white/58 px-0 py-4 text-[22px] font-semibold text-slate-950 lg:rounded-lg lg:border lg:border-dashed lg:border-[var(--border)] lg:px-3 lg:text-sm lg:font-normal lg:text-[var(--muted)]">
+                    {sessionSearch ? "没有找到相关对话" : "暂无最近对话"}
                   </div>
                 )}
               </div>
@@ -2118,7 +2197,7 @@ function ProductSidebar({
 
         <div
           ref={accountMenuRef}
-          className={cn("relative shrink-0 border-t border-[var(--border)] p-3", collapsed ? "lg:px-2" : "")}
+          className={cn("relative shrink-0 p-5 pb-[calc(env(safe-area-inset-bottom)+22px)] lg:border-t lg:border-[var(--border)] lg:p-3", collapsed ? "lg:px-2" : "")}
         >
           {accountMenuOpen ? (
             <AccountMenu
@@ -2143,19 +2222,21 @@ function ProductSidebar({
             <button
               type="button"
               onClick={() => setAccountMenuOpen((value) => !value)}
-              className="w-full rounded-lg border border-[var(--border)] bg-white/82 p-3 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+              className="w-full rounded-2xl bg-white p-0 text-left transition hover:bg-[var(--panel-muted)] lg:rounded-lg lg:border lg:border-[var(--border)] lg:bg-white/82 lg:p-3 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
               aria-label={`${user.name} · 账户菜单`}
               aria-expanded={accountMenuOpen}
             >
-              <div className="flex items-center gap-2">
-                <UserAvatar user={user} size="sm" className="shadow-none" />
+              <div className="flex items-center gap-4 lg:gap-2">
+                <UserAvatar user={user} size="sm" className="shadow-none lg:hidden" />
+                <UserAvatar user={user} size="sm" className="hidden shadow-none lg:flex" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{user.name}</p>
-                  <p className="truncate text-xs text-[var(--muted)]">
+                  <p className="truncate text-[22px] font-semibold text-slate-950 lg:text-sm lg:text-[var(--foreground)]">{user.name}</p>
+                  <p className="hidden truncate text-xs text-[var(--muted)] lg:block">
                     {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
                   </p>
                 </div>
-                <ChevronRight size={16} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
+                <Settings size={30} className="shrink-0 text-slate-950 lg:hidden" aria-hidden="true" />
+                <ChevronRight size={16} className="hidden shrink-0 text-[var(--muted)] lg:block" aria-hidden="true" />
               </div>
             </button>
           )}
@@ -2349,19 +2430,19 @@ function AccountSettingsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/18 px-4 py-6 backdrop-blur-md">
-      <div className="h-[min(650px,calc(100vh-3rem))] w-full max-w-[980px] overflow-hidden rounded-[28px] border border-white/85 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
-        <div className="grid h-full min-h-0 grid-cols-[230px_minmax(0,1fr)]">
-          <aside className="border-r border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f5faf9_100%)] p-4">
+    <div className="fixed inset-0 z-[120] grid place-items-end bg-slate-950/18 px-0 py-0 backdrop-blur-md lg:place-items-center lg:px-4 lg:py-6">
+      <div className="h-[100svh] w-full overflow-hidden rounded-none border-0 bg-white/96 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl lg:h-[min(650px,calc(100vh-3rem))] lg:max-w-[980px] lg:rounded-[28px] lg:border lg:border-white/85 lg:bg-white/92">
+        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[230px_minmax(0,1fr)] lg:grid-rows-1">
+          <aside className="border-b border-[var(--border)] bg-white/92 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+14px)] lg:border-b-0 lg:border-r lg:bg-[linear-gradient(180deg,#ffffff_0%,#f5faf9_100%)] lg:p-4">
             <button
               type="button"
               onClick={onClose}
-              className="mb-6 flex h-9 w-9 items-center justify-center rounded-xl text-[var(--foreground)] transition hover:bg-[var(--panel-strong)]"
+              className="mb-4 flex h-11 w-11 items-center justify-center rounded-full text-[var(--foreground)] transition hover:bg-[var(--panel-strong)] lg:mb-6 lg:h-9 lg:w-9 lg:rounded-xl"
               aria-label="关闭设置"
             >
               <X size={20} aria-hidden="true" />
             </button>
-            <div className="rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm">
+            <div className="hidden rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm lg:block">
               <div className="flex items-center gap-3">
                 <UserAvatar user={user} size="lg" className="shadow-none" />
                 <div className="min-w-0">
@@ -2370,12 +2451,12 @@ function AccountSettingsModal({
                 </div>
               </div>
             </div>
-            <nav className="mt-5 space-y-2">
+            <nav className="flex gap-2 overflow-x-auto lg:mt-5 lg:block lg:space-y-2 lg:overflow-visible">
               <button
                 type="button"
                 onClick={() => setActivePanel("profile")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "profile"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2388,7 +2469,7 @@ function AccountSettingsModal({
                 type="button"
                 onClick={() => setActivePanel("settings")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "settings"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2401,7 +2482,7 @@ function AccountSettingsModal({
                 type="button"
                 onClick={() => setActivePanel("connection")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "connection"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2414,14 +2495,14 @@ function AccountSettingsModal({
           </aside>
 
           <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-            <header className="border-b border-[var(--border)] px-7 py-5">
+            <header className="border-b border-[var(--border)] px-5 py-4 lg:px-7 lg:py-5">
               <h2 className="text-xl font-semibold tracking-normal">{activePanel === "profile" ? "个人资料" : activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
                 {activePanel === "profile" ? "昵称与头像" : activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
               </p>
             </header>
 
-            <div className="min-h-0 overflow-hidden p-5">
+            <div className="min-h-0 overflow-y-auto p-4 pb-[calc(env(safe-area-inset-bottom)+20px)] lg:overflow-hidden lg:p-5">
               {activePanel === "profile" ? (
                 <ProfileSettingsCard
                   user={{ ...user, name: profileName, avatarUrl: profileAvatar || null }}
@@ -2795,15 +2876,15 @@ function UserGuideModal({
   const ActiveIcon = activeSection.icon;
 
   return (
-    <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/18 px-4 py-5 backdrop-blur-md">
-      <div className="flex h-[min(680px,calc(100vh-2rem))] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-white/85 bg-white/95 shadow-[0_34px_90px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
+    <div className="fixed inset-0 z-[130] grid place-items-end bg-slate-950/18 px-0 py-0 backdrop-blur-md lg:place-items-center lg:px-4 lg:py-5">
+      <div className="flex h-[100svh] w-full flex-col overflow-hidden rounded-none border-0 bg-white/97 shadow-[0_34px_90px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl lg:h-[min(680px,calc(100vh-2rem))] lg:max-w-[920px] lg:rounded-2xl lg:border lg:border-white/85 lg:bg-white/95">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] px-5 pb-4 pt-[calc(env(safe-area-inset-top)+16px)] lg:py-4">
           <div className="flex min-w-0 items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
               <HelpCircle size={18} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold tracking-normal">用户使用说明</h2>
+              <h2 className="text-xl font-semibold tracking-normal">使用说明</h2>
             </div>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} title="关闭使用说明" aria-label="关闭使用说明">
@@ -2812,7 +2893,7 @@ function UserGuideModal({
         </header>
 
         <div className="shrink-0 border-b border-[var(--border)] bg-white/72 px-4 py-3">
-          <div className="grid max-w-[420px] grid-cols-2 rounded-xl border border-[var(--border)] bg-white p-1 shadow-sm">
+          <div className="grid max-w-[420px] grid-cols-2 rounded-full border border-[var(--border)] bg-white p-1 shadow-sm lg:rounded-xl">
             {editionOptions.map((edition) => {
               const active = edition.id === activeEdition;
               return (
@@ -2824,7 +2905,7 @@ function UserGuideModal({
                     setActiveSectionId(defaultSectionByEdition[edition.id]);
                   }}
                   className={cn(
-                    "h-9 rounded-lg px-3 text-sm font-semibold transition",
+                    "h-10 rounded-full px-3 text-sm font-semibold transition lg:h-9 lg:rounded-lg",
                     active
                       ? "bg-[var(--accent-tint)] text-[var(--accent-strong)] shadow-sm"
                       : "text-[var(--muted)] hover:bg-[var(--panel-muted)] hover:text-[var(--foreground)]",
@@ -2849,7 +2930,7 @@ function UserGuideModal({
                     type="button"
                     onClick={() => setActiveSectionId(section.id)}
                     className={cn(
-                      "flex min-w-[150px] items-center gap-3 rounded-xl border px-3 py-3 text-left transition lg:min-w-0 lg:w-full",
+                      "flex min-w-[150px] items-center gap-3 rounded-full border px-3 py-3 text-left transition lg:min-w-0 lg:w-full lg:rounded-xl",
                       active
                         ? "border-[var(--accent-soft)] bg-white font-semibold text-[var(--foreground)] shadow-[0_10px_28px_rgba(15,23,42,0.08)]"
                         : "border-transparent text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2868,8 +2949,8 @@ function UserGuideModal({
             </div>
           </aside>
 
-          <main className="min-h-0 overflow-y-auto p-4 sm:p-5">
-            <section className="min-h-full rounded-xl border border-[var(--border)] bg-white/88 p-4 shadow-sm sm:p-5">
+          <main className="min-h-0 overflow-y-auto p-4 pb-[calc(env(safe-area-inset-bottom)+20px)] sm:p-5">
+            <section className="min-h-full rounded-2xl border border-[var(--border)] bg-white/88 p-4 shadow-sm sm:p-5 lg:rounded-xl">
               <div className="flex items-center gap-3 border-b border-[var(--border)] pb-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
                   <ActiveIcon size={20} aria-hidden="true" />
@@ -2881,7 +2962,7 @@ function UserGuideModal({
 
               <ol className="mt-5 space-y-3">
                 {activeSection.steps.map((step, index) => (
-                  <li key={step} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] px-3 py-3">
+                  <li key={step} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] px-3 py-3 lg:rounded-xl">
                     <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--panel-strong)] text-sm font-semibold text-[var(--accent-strong)]">
                       {index + 1}
                     </span>
@@ -2913,16 +2994,17 @@ function ProductHeader({
   onOpenHelp: () => void;
 }) {
   return (
-    <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
-      <div className="flex h-12 items-center justify-between gap-3 px-3 sm:px-5 lg:px-5">
+    <header className="z-30 shrink-0 bg-white/0 backdrop-blur-xl lg:border-b lg:border-[var(--border)] lg:bg-white/78">
+      <div className="flex h-[72px] items-center justify-between gap-3 px-5 pt-[env(safe-area-inset-top)] lg:h-12 lg:px-5 lg:pt-0">
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
+            className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/88 text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.10)] ring-1 ring-white/80 transition hover:bg-white lg:hidden"
             onClick={onOpenSidebar}
             aria-label="打开导航"
           >
-            <Menu size={18} aria-hidden="true" />
+            <Menu size={24} strokeWidth={2.2} aria-hidden="true" />
+            {!healthOk ? <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" /> : null}
           </button>
           <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 shadow-sm md:flex">
             <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
@@ -2932,8 +3014,10 @@ function ProductHeader({
             </span>
           </div>
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">{PRODUCT_NAME} 工作台</p>
-            <p className="truncate text-xs text-[var(--muted)]">可信知识库问答</p>
+            <div className="inline-flex h-12 max-w-[210px] items-center gap-2 rounded-full bg-white/84 px-5 text-lg font-semibold tracking-normal text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80">
+              <span className="truncate">{PRODUCT_NAME}</span>
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", healthOk ? "bg-[var(--info)]" : "bg-[var(--danger)]")} aria-hidden="true" />
+            </div>
           </div>
         </div>
 
@@ -2942,11 +3026,11 @@ function ProductHeader({
             <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
             <span className="font-medium text-[var(--accent-strong)]">正常</span>
           </div>
-          <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-8 w-8" onClick={onOpenHelp}>
-            <HelpCircle size={16} aria-hidden="true" />
+          <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-12 w-12 rounded-full bg-white/84 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80 hover:bg-white lg:h-8 lg:w-8 lg:rounded-md lg:bg-transparent lg:shadow-none lg:ring-0" onClick={onOpenHelp}>
+            <HelpCircle size={22} className="lg:h-4 lg:w-4" aria-hidden="true" />
           </Button>
           <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
-          <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
+          <Button type="button" variant="secondary" size="sm" className="hidden h-8 rounded-full sm:inline-flex" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
           </Button>
@@ -2966,7 +3050,7 @@ function IconTooltip({ label }: { label: string }) {
 
 function HealthPill({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <div className="flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm">
+    <div className="hidden h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm sm:flex">
       <HeartPulse size={14} className={ok ? "text-[var(--accent)]" : "text-[var(--danger)]"} />
       <span className="hidden max-w-[120px] truncate text-[var(--muted)] sm:inline">{label}</span>
       <span className={ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}>
@@ -3380,18 +3464,25 @@ function StatusBadge({ status }: { status: "idle" | "streaming" | "error" }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({
+  user,
+  selectedKnowledgeBase,
+}: {
+  user: AuthUser;
+  selectedKnowledgeBase: KnowledgeBase;
+}) {
+  const firstName = user.name?.trim() || user.email.split("@", 1)[0] || "你好";
   return (
-    <div className="mx-auto flex h-full min-h-[420px] max-w-3xl flex-col items-center justify-center px-4 py-10 text-center">
-      <div className="rounded-[28px] border border-white/72 bg-white/54 px-8 py-7 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--accent-soft)] bg-white/82 text-[var(--accent-strong)] shadow-sm">
-          <Sparkles size={20} aria-hidden="true" />
+    <div className="mx-auto flex h-full min-h-[420px] max-w-3xl flex-col items-center justify-center px-4 pb-24 pt-10 text-center lg:py-10">
+      <div className="lg:rounded-[28px] lg:border lg:border-white/72 lg:bg-white/54 lg:px-8 lg:py-7 lg:shadow-[0_24px_80px_rgba(15,23,42,0.08)] lg:backdrop-blur-xl">
+        <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-2xl bg-white/76 text-[var(--accent-strong)] shadow-sm ring-1 ring-white/80 lg:mb-4 lg:h-12 lg:w-12 lg:border lg:border-[var(--accent-soft)] lg:bg-white/82">
+          <Sparkles size={21} aria-hidden="true" />
         </div>
-        <h2 className="text-2xl font-semibold tracking-normal sm:text-[30px]">
-          有什么需要查询？
+        <h2 className="text-[30px] font-semibold leading-tight tracking-normal text-slate-950 sm:text-[34px] lg:text-[30px]">
+          {firstName}，你好，我们开始吧
         </h2>
-        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">
-          输入问题后，系统会自动检索知识库、生成回答并保留可追溯引用。
+        <p className="mx-auto mt-4 max-w-[300px] text-sm leading-6 text-[var(--muted)] lg:max-w-md">
+          当前使用 {selectedKnowledgeBase.name}
         </p>
       </div>
     </div>
@@ -3413,17 +3504,17 @@ function MessageBubble({
 }) {
   const isUser = message.role === "user";
   return (
-    <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex gap-2.5 lg:gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser ? (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur">
+        <div className="mt-1 hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur sm:flex">
           <Bot size={17} aria-hidden="true" />
         </div>
       ) : null}
       <article
         className={cn(
-          "group max-w-[min(720px,92%)] text-[15px] leading-7",
+          "group max-w-[min(720px,94%)] text-[15px] leading-7 lg:max-w-[min(720px,92%)]",
           isUser
-            ? "rounded-3xl border border-[var(--accent-soft)] bg-white/78 px-5 py-3 text-[var(--foreground)] shadow-sm backdrop-blur"
+            ? "rounded-[24px] bg-white/86 px-4 py-2.5 text-[var(--foreground)] shadow-sm backdrop-blur lg:rounded-3xl lg:border lg:border-[var(--accent-soft)] lg:bg-white/78 lg:px-5 lg:py-3"
             : "text-[var(--foreground)]",
         )}
       >
@@ -3438,7 +3529,7 @@ function MessageBubble({
           </div>
         ) : null}
         {!isUser ? (
-          <div className="mt-3 flex items-center gap-1 text-[var(--muted)] opacity-75 transition group-hover:opacity-100">
+          <div className="mt-3 flex flex-wrap items-center gap-1 text-[var(--muted)] opacity-75 transition group-hover:opacity-100">
             <IconAction label={copied ? "已复制" : "复制回答"} onClick={onCopy} icon={Copy} />
             <IconAction
               label={message.favorite ? "已收藏" : "收藏回答"}
@@ -3519,24 +3610,34 @@ function Composer({
   onSubmit: (event: FormEvent) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="shrink-0 px-4 pb-4">
-      <div className="mx-auto max-w-3xl rounded-[26px] border border-white/80 bg-white/88 p-3 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-xl transition focus-within:border-white focus-within:bg-white focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)]">
-        <textarea
-          value={input}
-          onChange={(event) => onInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder="输入校园资料库相关问题..."
-          className="chat-composer-input min-h-16 w-full resize-none border-0 bg-transparent px-3 py-2 text-base leading-7 text-[var(--foreground)] outline-none placeholder:text-slate-400"
-          rows={2}
-          maxLength={2000}
-        />
-        <div className="flex items-center justify-end px-1 pt-1">
-          <Button type="submit" variant="primary" size="icon" className="h-11 w-11 rounded-full" disabled={status === "streaming"} title="发送" aria-label="发送">
+    <form onSubmit={onSubmit} className="mobile-composer pointer-events-none absolute inset-x-0 bottom-0 z-20 shrink-0 px-5 pb-[calc(env(safe-area-inset-bottom)+18px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
+      <div className="pointer-events-auto mx-auto max-w-3xl rounded-[30px] border border-white/86 bg-white/92 p-2 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-xl transition focus-within:border-white focus-within:bg-white focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
+        <div className="flex min-h-[58px] items-end gap-2 lg:block lg:min-h-0">
+          <button
+            type="button"
+            className="mb-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-950 transition hover:bg-[var(--panel-strong)] lg:hidden"
+            aria-label="更多输入方式"
+          >
+            <Plus size={29} strokeWidth={1.9} aria-hidden="true" />
+          </button>
+          <textarea
+            value={input}
+            onChange={(event) => onInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="询问 Maverella"
+            className="chat-composer-input min-h-[52px] flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[17px] leading-7 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
+            rows={1}
+            maxLength={2000}
+          />
+          <Button type="button" variant="ghost" size="icon" className="mb-1 h-11 w-11 shrink-0 rounded-full text-slate-500 hover:bg-[var(--panel-strong)] lg:hidden" title="语音输入" aria-label="语音输入">
+            <Mic size={24} strokeWidth={2.1} aria-hidden="true" />
+          </Button>
+          <Button type="submit" variant="primary" size="icon" className="mb-1 h-11 w-11 shrink-0 rounded-full bg-slate-950 text-white hover:bg-slate-800 lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={status === "streaming"} title="发送" aria-label="发送">
             {status === "streaming" ? (
               <Loader2 className="animate-spin" size={16} aria-hidden="true" />
             ) : (
@@ -3545,7 +3646,7 @@ function Composer({
           </Button>
         </div>
       </div>
-      <p className="mx-auto mt-2 max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm">
+      <p className="mx-auto mt-2 hidden max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm lg:block">
         遇到无法解决的问题，请联系管理员：
         <a className="font-medium text-[var(--accent-strong)] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
           {ADMIN_CONTACT_EMAIL}
