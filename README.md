@@ -22,6 +22,8 @@
 
 用户提问后，系统会先判断问题是否属于校园资料库范围；范围内问题进入查询改写、BM25 + embedding 混合召回、重排、引用生成；超纲问题会直接熔断，不调用大模型。
 
+`main` 保持通用 Web 产品主干。分支职责见 [分支职责说明](docs/BRANCH_STRATEGY.md)；桌面端 Electron 打包能力继续在 `feature/desktop-electron-local-rag` 中维护，阿里云公开部署模板见 [docs/README.md](docs/README.md)。
+
 ## 核心能力
 
 | 能力 | 说明 |
