@@ -1,16 +1,17 @@
-FROM node:24-slim AS deps
+ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:24-slim
+FROM ${NODE_BASE_IMAGE} AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 
-FROM node:24-slim AS builder
+FROM ${NODE_BASE_IMAGE} AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:24-slim AS runner
+FROM ${NODE_BASE_IMAGE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

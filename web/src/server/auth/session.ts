@@ -29,6 +29,17 @@ export function getAuthSecret() {
   return process.env.AUTH_SECRET ?? "xyfrag-dev-auth-secret-change-me";
 }
 
+function shouldUseSecureCookie() {
+  const configured = process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase();
+  if (configured === "true") {
+    return true;
+  }
+  if (configured === "false") {
+    return false;
+  }
+  return process.env.NODE_ENV === "production";
+}
+
 export function signSession(userId: string) {
   const payload: SessionPayload = {
     userId,
@@ -68,7 +79,7 @@ export function setSessionCookie(response: NextResponse, userId: string) {
     value: signSession(userId),
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(),
     maxAge: SESSION_MAX_AGE_SECONDS,
     path: "/",
   });
@@ -80,7 +91,7 @@ export function clearSessionCookie(response: NextResponse) {
     value: "",
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(),
     maxAge: 0,
     path: "/",
   });

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 import { AuthProvider } from "@/features/auth/auth-provider";
 
@@ -11,6 +11,13 @@ export const metadata: Metadata = {
     icon: "/images/icon.png",
     apple: "/images/icon.png",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

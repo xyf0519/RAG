@@ -319,6 +319,21 @@ def test_boundary_item_endpoints() -> None:
         model_response = client.get("/api/v1/knowledge-bases/kb-default/classifier-models")
         assert model_response.status_code == 200
         assert model_response.json()[0]["name"] == "边界范围模型"
+        model_id = model_response.json()[0]["id"]
+
+        disable_response = client.patch(
+            "/api/v1/knowledge-bases/kb-default",
+            json={"active_classifier_model_id": "disabled"},
+        )
+        assert disable_response.status_code == 200
+        assert disable_response.json()["active_classifier_model_id"] == "disabled"
+
+        activate_response = client.patch(
+            "/api/v1/knowledge-bases/kb-default",
+            json={"active_classifier_model_id": model_id},
+        )
+        assert activate_response.status_code == 200
+        assert activate_response.json()["active_classifier_model_id"] == model_id
 
         generate_response = client.post(
             "/api/v1/knowledge-bases/kb-default/boundary-items/generate",
