@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Activity,
   Archive,
   Bot,
   BrainCircuit,
@@ -41,7 +40,10 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Children, Fragment, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -84,10 +86,10 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
   name: "默认校园资料库",
   description: "默认知识库",
   status: "active",
-  boundary_classifier_enabled: true,
   document_count: 0,
   index_status: "not_indexed",
   last_indexed_at: null,
+  active_classifier_model_id: null,
   updated_at: Date.now() / 1000,
   created_at: Date.now() / 1000,
 };
@@ -97,15 +99,8 @@ const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
 const PRODUCT_NAME = "Maverella";
 const ADMIN_CONTACT_EMAIL = "xinyufei@zju.edu.cn";
-const DISABLED_BOUNDARY_MODEL_ID = "__boundary_model_disabled__";
+const DISABLED_CLASSIFIER_MODEL_ID = "disabled";
 
-const MOBILE_TABS = [
-  { id: "chat", label: "对话", icon: MessageSquareText },
-  { id: "sources", label: "引用", icon: FileText },
-  { id: "process", label: "过程", icon: Activity },
-] as const;
-
-type MobileTab = (typeof MOBILE_TABS)[number]["id"];
 type TraceStage = "idle" | "boundary" | "rewrite" | "retrieve" | "rerank" | "generate" | "complete";
 type FeedbackStats = {
   positive: number;
@@ -127,11 +122,87 @@ const PROCESS_STAGES: Array<{
   { id: "complete", label: "完成交付", description: "输出答案、引用与耗时指标", icon: CheckCircle2 },
 ];
 
+function useIsMobileLayout() {
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      setIsMobileLayout(false);
+      return;
+    }
+
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = () => setIsMobileLayout(media.matches);
+
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return isMobileLayout;
+}
+
+function useMobileVisualViewport(enabled: boolean) {
+  const [viewport, setViewport] = useState({
+    keyboardOpen: false,
+  });
+
+  useEffect(() => {
+    if (!enabled) {
+      document.documentElement.style.removeProperty("--mobile-visual-height");
+      document.documentElement.style.removeProperty("--mobile-visual-width");
+      document.documentElement.style.removeProperty("--mobile-keyboard-inset");
+      document.documentElement.style.removeProperty("--mobile-visual-offset-top");
+      document.documentElement.style.removeProperty("--mobile-visual-offset-left");
+      setViewport({ keyboardOpen: false });
+      return;
+    }
+
+    const update = () => {
+      const visualViewport = window.visualViewport;
+      const layoutHeight = window.innerHeight;
+      const layoutWidth = window.innerWidth;
+      const visualHeight = visualViewport?.height ?? layoutHeight;
+      const offsetTop = visualViewport?.offsetTop ?? 0;
+      const offsetLeft = visualViewport?.offsetLeft ?? 0;
+      const visualWidth = visualViewport?.width ?? layoutWidth;
+      const keyboardInset = Math.max(0, layoutHeight - visualHeight - offsetTop);
+
+      document.documentElement.style.setProperty("--mobile-visual-height", `${Math.round(visualHeight)}px`);
+      document.documentElement.style.setProperty("--mobile-visual-width", `${Math.round(visualWidth)}px`);
+      document.documentElement.style.setProperty("--mobile-keyboard-inset", `${Math.round(keyboardInset)}px`);
+      document.documentElement.style.setProperty("--mobile-visual-offset-top", `${Math.round(offsetTop)}px`);
+      document.documentElement.style.setProperty("--mobile-visual-offset-left", `${Math.round(offsetLeft)}px`);
+      setViewport({
+        keyboardOpen: keyboardInset > 80,
+      });
+    };
+
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+      document.documentElement.style.removeProperty("--mobile-visual-height");
+      document.documentElement.style.removeProperty("--mobile-visual-width");
+      document.documentElement.style.removeProperty("--mobile-keyboard-inset");
+      document.documentElement.style.removeProperty("--mobile-visual-offset-top");
+      document.documentElement.style.removeProperty("--mobile-visual-offset-left");
+    };
+  }, [enabled]);
+
+  return viewport;
+}
+
 export function ChatWorkspace() {
   const auth = useAuth();
   const chat = useRagChatStream();
   const [input, setInput] = useState("");
-  const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthOk, setHealthOk] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -144,6 +215,8 @@ export function ChatWorkspace() {
   const [knowledgeNotice, setKnowledgeNotice] = useState("知识库运维状态正常。");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const isMobileLayout = useIsMobileLayout();
+  const mobileViewport = useMobileVisualViewport(isMobileLayout);
 
   useEffect(() => {
     let mounted = true;
@@ -227,11 +300,16 @@ export function ChatWorkspace() {
       return;
     }
     setInput("");
-    setMobileTab("chat");
     void chat.sendMessage(query, selectedKnowledgeBase);
   }
 
   function changeWorkspaceView(view: WorkspaceView) {
+    if (isMobileLayout) {
+      setWorkspaceView("chat");
+      setSidebarOpen(false);
+      setSidebarCollapsed(false);
+      return;
+    }
     setWorkspaceView(view);
     setSidebarOpen(false);
     if (view === "chat") {
@@ -289,8 +367,14 @@ export function ChatWorkspace() {
   }
 
   return (
-    <main className="h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
-      <div className="flex h-full min-h-0">
+    <main
+      className={cn(
+        "mobile-app-shell fixed inset-0 h-[100dvh] overflow-hidden bg-transparent text-[var(--foreground)] lg:relative lg:h-screen lg:bg-[var(--background)]",
+        isMobileLayout && mobileViewport.keyboardOpen ? "mobile-keyboard-open" : "",
+      )}
+    >
+      <div className="mobile-device-backdrop pointer-events-none fixed inset-0 z-0 bg-[#dfeffd] lg:hidden" aria-hidden="true" />
+      <div className="relative z-10 flex h-full min-h-0">
         <ProductSidebar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
@@ -301,7 +385,8 @@ export function ChatWorkspace() {
           onOpenSession={openStoredSession}
           user={auth.user}
           isAdmin={auth.isAdmin}
-          activeView={workspaceView}
+          isMobileLayout={isMobileLayout}
+          activeView={isMobileLayout ? "chat" : workspaceView}
           collapsed={sidebarCollapsed}
           onChangeView={changeWorkspaceView}
           onToggleCollapse={() => setSidebarCollapsed((value) => !value)}
@@ -310,16 +395,18 @@ export function ChatWorkspace() {
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col transition-all duration-300 ease-out">
-          <ProductHeader
-            health={health}
-            healthOk={healthOk}
-            user={auth.user}
-            onSignOut={auth.signOut}
-            onOpenSidebar={() => setSidebarOpen(true)}
-            onOpenHelp={() => setHelpOpen(true)}
-          />
+          {!isMobileLayout ? (
+            <ProductHeader
+              health={health}
+              healthOk={healthOk}
+              user={auth.user}
+              onSignOut={auth.signOut}
+              onOpenSidebar={() => setSidebarOpen(true)}
+              onOpenHelp={() => setHelpOpen(true)}
+            />
+          ) : null}
 
-          {workspaceView === "knowledge" && auth.isAdmin ? (
+          {!isMobileLayout && workspaceView === "knowledge" && auth.isAdmin ? (
             <KnowledgeAddWorkspace
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedKnowledgeBase.id}
@@ -329,19 +416,22 @@ export function ChatWorkspace() {
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
-          {workspaceView === "boundary" && auth.isAdmin ? (
+          {!isMobileLayout && workspaceView === "boundary" && auth.isAdmin ? (
             <BoundaryTrainingWorkspace
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedKnowledgeBase.id}
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
-          {workspaceView === "users" && auth.isAdmin ? <UserOperationsWorkspace currentUser={auth.user} /> : null}
-          {workspaceView === "chat" || !auth.isAdmin ? (
+          {!isMobileLayout && workspaceView === "users" && auth.isAdmin ? <UserOperationsWorkspace currentUser={auth.user} /> : null}
+          {isMobileLayout || workspaceView === "chat" || !auth.isAdmin ? (
             <ChatWorkspaceView
               chat={chat}
               input={input}
-              mobileTab={mobileTab}
+              user={auth.user}
+              isMobileLayout={isMobileLayout}
+              keyboardOpen={mobileViewport.keyboardOpen}
+              healthOk={healthOk}
               currentSources={currentSources}
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBase={selectedKnowledgeBase}
@@ -350,7 +440,7 @@ export function ChatWorkspace() {
               copiedAnswerId={copiedAnswerId}
               sourcesCollapsed={sourcesCollapsed}
               onInput={setInput}
-              onMobileTab={setMobileTab}
+              onOpenSidebar={() => setSidebarOpen(true)}
               onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
               onToggleSources={() => setSourcesCollapsed((value) => !value)}
               onSubmit={onSubmit}
@@ -375,7 +465,10 @@ export function ChatWorkspace() {
 function ChatWorkspaceView({
   chat,
   input,
-  mobileTab,
+  user,
+  isMobileLayout,
+  keyboardOpen,
+  healthOk,
   currentSources,
   knowledgeBases,
   selectedKnowledgeBase,
@@ -384,7 +477,7 @@ function ChatWorkspaceView({
   copiedAnswerId,
   sourcesCollapsed,
   onInput,
-  onMobileTab,
+  onOpenSidebar,
   onSelectKnowledgeBase,
   onToggleSources,
   onSubmit,
@@ -394,7 +487,10 @@ function ChatWorkspaceView({
 }: {
   chat: ReturnType<typeof useRagChatStream>;
   input: string;
-  mobileTab: MobileTab;
+  user: AuthUser;
+  isMobileLayout: boolean;
+  keyboardOpen: boolean;
+  healthOk: boolean;
   currentSources: Source[];
   knowledgeBases: KnowledgeBase[];
   selectedKnowledgeBase: KnowledgeBase;
@@ -408,7 +504,7 @@ function ChatWorkspaceView({
   copiedAnswerId: string | null;
   sourcesCollapsed: boolean;
   onInput: (value: string) => void;
-  onMobileTab: (tab: MobileTab) => void;
+  onOpenSidebar: () => void;
   onSelectKnowledgeBase: (knowledgeBaseId: string) => void;
   onToggleSources: () => void;
   onSubmit: (event: FormEvent) => void;
@@ -417,19 +513,32 @@ function ChatWorkspaceView({
   onToggleFavorite: (messageId: string) => void;
 }) {
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <div className="mobile-chat-shell relative min-h-0 flex-1 overflow-hidden">
       <Image src={CHAT_BACKGROUND_SRC} alt="" fill priority sizes="100vw" className="object-cover opacity-70" />
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(249,251,252,0.72)_0%,rgba(245,249,250,0.90)_62%,rgba(245,249,250,0.96)_100%)]" />
+      <div className="mobile-chat-backdrop absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(248,252,253,0.92)_54%,rgba(222,239,254,0.90)_100%)] lg:bg-[linear-gradient(180deg,rgba(249,251,252,0.72)_0%,rgba(245,249,250,0.90)_62%,rgba(245,249,250,0.96)_100%)]" />
       <div
         className={cn(
-          "relative grid h-full min-h-0 grid-cols-1 gap-3 overflow-hidden px-3 py-3 sm:px-5 lg:gap-4 lg:px-5 lg:py-4",
+          "relative grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden px-0 py-0 lg:grid-rows-1 lg:gap-4 lg:px-5 lg:py-4",
           sourcesCollapsed
             ? "lg:grid-cols-[minmax(0,1fr)_56px]"
             : "lg:grid-cols-[minmax(0,1fr)_392px]",
         )}
       >
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/70 bg-white/62 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
-          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4">
+        <section className={cn(
+          "mobile-chat-panel relative min-h-0 min-w-0 overflow-hidden bg-white/0 lg:flex lg:rounded-2xl lg:border lg:border-white/70 lg:bg-white/62 lg:shadow-[0_24px_80px_rgba(15,23,42,0.10)] lg:backdrop-blur-xl",
+          "grid grid-rows-[auto_minmax(0,1fr)_auto] lg:flex lg:flex-col",
+        )}>
+          {isMobileLayout ? (
+            <MobileChatHeader
+              healthOk={healthOk}
+              status={chat.status}
+              knowledgeBases={knowledgeBases}
+              selectedKnowledgeBase={selectedKnowledgeBase}
+              onOpenSidebar={onOpenSidebar}
+              onSelectKnowledgeBase={onSelectKnowledgeBase}
+            />
+          ) : null}
+          <div className="hidden h-14 shrink-0 items-center justify-between gap-3 border-b border-white/70 px-4 lg:flex">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="truncate text-sm font-semibold">{PRODUCT_NAME}</h1>
@@ -457,11 +566,16 @@ function ChatWorkspaceView({
             </div>
           </div>
 
-          <div className="chat-scroll flex-1 overflow-y-auto px-4 py-6">
+          <div
+            className={cn(
+              "chat-scroll mobile-chat-scroll flex-1 overflow-y-auto px-4 pb-32 pt-1 sm:px-5 lg:px-4 lg:py-6",
+              chat.messages.length === 0 ? "mobile-chat-scroll--empty overflow-hidden" : "",
+            )}
+          >
             {chat.messages.length === 0 ? (
-              <EmptyState />
+              <EmptyState user={user} selectedKnowledgeBase={selectedKnowledgeBase} compact={keyboardOpen} />
             ) : (
-              <div className="mx-auto max-w-3xl space-y-6">
+              <div className="mx-auto max-w-3xl space-y-5 lg:space-y-6">
                 {chat.messages.map((message) => (
                   <MessageBubble
                     key={message.id}
@@ -478,7 +592,7 @@ function ChatWorkspaceView({
           </div>
 
         {chat.lastError ? (
-          <div className="mx-4 mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
+          <div className="mx-4 mb-3 rounded-2xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)] lg:rounded-md">
             {chat.lastError.message}
           </div>
         ) : null}
@@ -501,34 +615,51 @@ function ChatWorkspaceView({
           </>
         )}
       </aside>
-
-      <section className="min-h-0 overflow-y-auto lg:hidden">
-        <div className="mb-3 grid grid-cols-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-1 shadow-sm">
-          {MOBILE_TABS.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => onMobileTab(tab.id)}
-                className={cn(
-                  "flex h-10 items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors",
-                  mobileTab === tab.id
-                    ? "bg-[var(--accent)] text-white"
-                    : "text-[var(--muted)] hover:bg-[var(--panel-strong)]",
-                )}
-              >
-                <Icon size={14} aria-hidden="true" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-        {mobileTab === "sources" ? <SourcePanel sources={currentSources} knowledgeBases={knowledgeBases} /> : null}
-        {mobileTab === "process" ? <ProcessPanel events={chat.events} metadata={latestMetadata} feedbackStats={feedbackStats} /> : null}
-      </section>
       </div>
     </div>
+  );
+}
+
+function MobileChatHeader({
+  healthOk,
+  status,
+  knowledgeBases,
+  selectedKnowledgeBase,
+  onOpenSidebar,
+  onSelectKnowledgeBase,
+}: {
+  healthOk: boolean;
+  status: "idle" | "streaming" | "error";
+  knowledgeBases: KnowledgeBase[];
+  selectedKnowledgeBase: KnowledgeBase;
+  onOpenSidebar: () => void;
+  onSelectKnowledgeBase: (knowledgeBaseId: string) => void;
+}) {
+  return (
+    <header className="mobile-chat-header relative z-30 flex h-[68px] shrink-0 items-center gap-2.5 px-4 pt-[calc(env(safe-area-inset-top)+8px)] lg:hidden">
+      <button
+        type="button"
+        className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/78 text-slate-950 shadow-[0_10px_26px_rgba(15,23,42,0.08)] ring-1 ring-white/85 backdrop-blur-2xl transition active:scale-95"
+        onClick={onOpenSidebar}
+        aria-label="打开菜单"
+      >
+        <Menu size={21} strokeWidth={2.1} aria-hidden="true" />
+      </button>
+      <div className="min-w-0 flex-1 max-w-[min(58vw,230px)]">
+        <KnowledgeBaseSelect
+          knowledgeBases={knowledgeBases}
+          selectedId={selectedKnowledgeBase.id}
+          onSelect={onSelectKnowledgeBase}
+        />
+      </div>
+      <span
+        className={cn(
+          "ml-auto h-2 w-2 shrink-0 rounded-full shadow-[0_0_0_4px_rgba(255,255,255,0.88)]",
+          status === "streaming" ? "bg-[var(--accent)] motion-safe:animate-[traceBreath_2.8s_ease-in-out_infinite]" : healthOk ? "bg-[var(--info)]" : "bg-[var(--danger)]",
+        )}
+        aria-hidden="true"
+      />
+    </header>
   );
 }
 
@@ -557,19 +688,17 @@ function KnowledgeAddWorkspace({
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
-  const [savingBoundaryModel, setSavingBoundaryModel] = useState(false);
+  const [savingClassifierModel, setSavingClassifierModel] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
-  const classifierModelCandidate =
-    classifierModels.find((model) => model.id === selectedClassifierModelId) ?? classifierModels[0] ?? null;
-  const boundaryModelDisabled =
-    selectedKnowledgeBase.boundary_classifier_enabled === false ||
-    (savingBoundaryModel && selectedClassifierModelId === DISABLED_BOUNDARY_MODEL_ID);
-  const selectedClassifierModel = boundaryModelDisabled ? null : classifierModelCandidate;
-  const selectedBoundaryModelValue = boundaryModelDisabled
-    ? DISABLED_BOUNDARY_MODEL_ID
-    : selectedClassifierModel?.id ?? "";
+  const visibleKnowledgeBases = knowledgeBases;
+  const classifierSelectValue =
+    selectedClassifierModelId === DISABLED_CLASSIFIER_MODEL_ID || classifierModels.some((model) => model.id === selectedClassifierModelId)
+      ? selectedClassifierModelId
+      : selectedKnowledgeBase.active_classifier_model_id ?? DISABLED_CLASSIFIER_MODEL_ID;
+  const selectedClassifierModel =
+    classifierModels.find((model) => model.id === classifierSelectValue) ?? null;
   const selectedClassifierMetrics = parseClassifierModelMetrics(selectedClassifierModel?.metrics_json);
 
   const refreshDocuments = useCallback(async () => {
@@ -602,13 +731,15 @@ function KnowledgeAddWorkspace({
       }
       const models = (await response.json()) as ClassifierModel[];
       setClassifierModels(models);
-      setSelectedClassifierModelId((current) => (models.some((model) => model.id === current) ? current : models[0]?.id ?? ""));
+      setSelectedClassifierModelId(
+        selectedKnowledgeBase.active_classifier_model_id ?? DISABLED_CLASSIFIER_MODEL_ID,
+      );
     } catch (error) {
       setClassifierModels([]);
-      setSelectedClassifierModelId("");
+      setSelectedClassifierModelId(DISABLED_CLASSIFIER_MODEL_ID);
       onNotice(error instanceof Error ? error.message : "模型列表加载失败。");
     }
-  }, [onNotice, selectedKnowledgeBase?.id]);
+  }, [onNotice, selectedKnowledgeBase.active_classifier_model_id, selectedKnowledgeBase?.id]);
 
   useEffect(() => {
     void refreshDocuments();
@@ -745,69 +876,48 @@ function KnowledgeAddWorkspace({
     }
   }
 
-  async function changeBoundaryModel(value: string) {
-    if (value === DISABLED_BOUNDARY_MODEL_ID) {
-      setSavingBoundaryModel(true);
-      try {
-        const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ boundary_classifier_enabled: false }),
-        });
-        if (!response.ok) {
-          throw new Error(await readResponseError(response, "边界模型更新失败。"));
-        }
-        setSelectedClassifierModelId(DISABLED_BOUNDARY_MODEL_ID);
-        onNotice("边界模型已禁用。");
-        await onRefresh();
-      } catch (error) {
-        onNotice(error instanceof Error ? error.message : "边界模型更新失败。");
-      } finally {
-        setSavingBoundaryModel(false);
+  async function saveClassifierModel(classifierModelId: string) {
+    setSelectedClassifierModelId(classifierModelId);
+    setSavingClassifierModel(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active_classifier_model_id: classifierModelId }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "边界模型更新失败。"));
       }
-      return;
-    }
-
-    setSelectedClassifierModelId(value);
-    if (boundaryModelDisabled) {
-      setSavingBoundaryModel(true);
-      try {
-        const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ boundary_classifier_enabled: true }),
-        });
-        if (!response.ok) {
-          throw new Error(await readResponseError(response, "边界模型更新失败。"));
-        }
-        onNotice("边界模型已启用。");
-        await onRefresh();
-      } catch (error) {
-        onNotice(error instanceof Error ? error.message : "边界模型更新失败。");
-      } finally {
-        setSavingBoundaryModel(false);
-      }
+      onNotice(classifierModelId === DISABLED_CLASSIFIER_MODEL_ID ? "边界模型已设为 disabled。" : "边界模型已更新。");
+      await onRefresh();
+    } catch (error) {
+      setSelectedClassifierModelId(
+        selectedKnowledgeBase.active_classifier_model_id ?? DISABLED_CLASSIFIER_MODEL_ID,
+      );
+      onNotice(error instanceof Error ? error.message : "边界模型更新失败。");
+    } finally {
+      setSavingClassifierModel(false);
     }
   }
 
   return (
-    <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_300px]">
-        <div className="grid h-full min-h-0 grid-rows-[176px_minmax(0,1fr)] gap-4">
+    <section className="mobile-admin-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3 sm:px-5 lg:h-full lg:overflow-hidden lg:px-6 lg:py-5">
+      <div className="mx-auto grid max-w-[1440px] gap-4 lg:h-full lg:min-h-0 xl:grid-cols-[340px_minmax(0,1fr)_300px]">
+        <div className="grid gap-4 lg:h-full lg:min-h-0 lg:grid-rows-[176px_minmax(0,1fr)]">
           <VisualHero
             image={KNOWLEDGE_VISUAL_SRC}
             eyebrow="Knowledge"
             title="添加知识库"
             description="创建资料空间，上传文档并构建索引。"
           />
-          <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
+          <Card className="flex min-h-[260px] flex-col overflow-hidden shadow-[var(--shadow-soft)] lg:min-h-0">
             <CardHeader className="shrink-0">
               <h2 className="text-sm font-semibold">知识库</h2>
               <p className="text-xs text-[var(--muted)]">{knowledgeBases.length} 个空间</p>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-y-auto">
-              <div className="space-y-2">
-                {knowledgeBases.map((knowledgeBase) => (
+              <div className="space-y-2 pr-1">
+                {visibleKnowledgeBases.map((knowledgeBase) => (
                   <button
                     key={knowledgeBase.id}
                     type="button"
@@ -836,20 +946,20 @@ function KnowledgeAddWorkspace({
           </Card>
         </div>
 
-        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+        <div className="grid gap-4 lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardContent className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
               <input
                 value={newName}
                 onChange={(event) => setNewName(event.target.value)}
                 placeholder="知识库名称"
-                className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
+                className="h-11 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)] lg:h-10"
               />
               <input
                 value={newDescription}
                 onChange={(event) => setNewDescription(event.target.value)}
                 placeholder="一句话描述"
-                className="h-10 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)]"
+                className="h-11 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none focus:border-[var(--accent)] lg:h-10"
               />
               <Button type="button" variant="primary" onClick={createKnowledgeBase}>
                 <Plus size={15} aria-hidden="true" />
@@ -858,7 +968,7 @@ function KnowledgeAddWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
+          <Card className="flex min-h-[520px] flex-col overflow-hidden shadow-[var(--shadow-soft)] lg:min-h-0">
             <CardHeader className="shrink-0">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -877,7 +987,7 @@ function KnowledgeAddWorkspace({
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid min-h-0 flex-1 grid-rows-[210px_minmax(0,1fr)] gap-3">
+            <CardContent className="grid min-h-0 flex-1 grid-rows-[180px_minmax(220px,1fr)] gap-3 sm:grid-rows-[210px_minmax(240px,1fr)] lg:grid-rows-[210px_minmax(0,1fr)]">
               <div
                 onDragOver={(event) => event.preventDefault()}
                 onDragEnter={(event) => {
@@ -891,7 +1001,7 @@ function KnowledgeAddWorkspace({
                   void onFiles(Array.from(event.dataTransfer.files));
                 }}
                 className={cn(
-                  "grid place-items-center rounded-2xl border border-dashed bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] text-center transition hover:border-[var(--accent)]",
+                  "grid min-h-0 place-items-center rounded-2xl border border-dashed bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] text-center transition hover:border-[var(--accent)]",
                   dragging ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(0,108,99,0.12)]" : "border-[var(--border-strong)]",
                 )}
               >
@@ -936,7 +1046,7 @@ function KnowledgeAddWorkspace({
           </Card>
         </div>
 
-        <aside className="grid min-h-0 content-start gap-4 overflow-hidden">
+        <aside className="grid content-start gap-4 lg:min-h-0 lg:overflow-hidden">
           <Card className="shadow-[var(--shadow-soft)]">
             <CardHeader>
               <h2 className="text-sm font-semibold">状态</h2>
@@ -968,31 +1078,30 @@ function KnowledgeAddWorkspace({
             <CardContent className="space-y-3 px-4 pb-4 pt-3">
               <select
                 id="knowledge-model-select"
-                value={selectedBoundaryModelValue}
-                onChange={(event) => void changeBoundaryModel(event.target.value)}
-                disabled={savingBoundaryModel}
-                className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)] disabled:opacity-60"
+                value={classifierSelectValue}
+                onChange={(event) => void saveClassifierModel(event.target.value)}
+                disabled={savingClassifierModel}
+                className="h-11 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-70 lg:h-10"
               >
-                {!classifierModels.length && !boundaryModelDisabled ? <option value="">暂无可用模型</option> : null}
-                <option value={DISABLED_BOUNDARY_MODEL_ID}>禁用边界模型</option>
+                <option value={DISABLED_CLASSIFIER_MODEL_ID}>disabled</option>
                 {classifierModels.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name} · v{model.version}
                   </option>
                 ))}
               </select>
-              {boundaryModelDisabled ? (
-                <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-muted)] p-4 text-sm text-[var(--muted)]">
-                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--muted)] shadow-sm">
-                    {savingBoundaryModel ? <Loader2 className="animate-spin" size={16} aria-hidden="true" /> : <BrainCircuit size={16} aria-hidden="true" />}
+              {classifierSelectValue === DISABLED_CLASSIFIER_MODEL_ID ? (
+                <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--panel-muted)] p-4 text-sm text-[var(--muted)]">
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--accent-strong)] shadow-sm">
+                    {savingClassifierModel ? <Loader2 className="animate-spin" size={16} aria-hidden="true" /> : <ShieldCheck size={16} aria-hidden="true" />}
                   </div>
-                  边界模型已禁用，问答将直接进入检索流程。
+                  disabled
                 </div>
               ) : selectedClassifierModel ? (
                 <div className="boundary-model-status relative overflow-hidden rounded-2xl border border-[var(--accent-soft)] bg-[linear-gradient(135deg,#ffffff_0%,#eefaf8_58%,#f7fbfc_100%)] p-2.5 shadow-sm">
                   <div className="relative flex items-center gap-3">
                     <div className="boundary-model-orb flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#12a594_0%,#006c63_100%)] text-white shadow-[0_16px_32px_rgba(0,108,99,0.22)]">
-                      <BrainCircuit size={17} aria-hidden="true" />
+                      {savingClassifierModel ? <Loader2 className="animate-spin" size={17} aria-hidden="true" /> : <BrainCircuit size={17} aria-hidden="true" />}
                     </div>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{selectedClassifierModel.name}</p>
@@ -1333,9 +1442,9 @@ function BoundaryTrainingWorkspace({
   const modelScopeLabel = modelScope === "global" ? "全局基线" : modelScope === "session" ? "会话实验" : "知识库专属";
 
   return (
-    <section className="h-full min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid h-full max-w-[1440px] min-h-0 gap-3 lg:grid-cols-[240px_minmax(360px,1fr)_260px] xl:grid-cols-[300px_minmax(0,1fr)_330px] xl:gap-4">
-        <div className="grid min-h-0 grid-rows-[150px_auto_minmax(0,1fr)] gap-3 xl:grid-rows-[178px_auto_minmax(0,1fr)]">
+    <section className="mobile-admin-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3 sm:px-5 lg:h-full lg:overflow-hidden lg:px-6 lg:py-5">
+      <div className="mx-auto grid max-w-[1440px] gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[240px_minmax(360px,1fr)_260px] xl:grid-cols-[300px_minmax(0,1fr)_330px] xl:gap-4">
+        <div className="grid gap-3 lg:min-h-0 lg:grid-rows-[150px_auto_minmax(0,1fr)] xl:grid-rows-[178px_auto_minmax(0,1fr)]">
           <VisualHero
             image={BOUNDARY_VISUAL_SRC}
             eyebrow="Boundary"
@@ -1351,7 +1460,7 @@ function BoundaryTrainingWorkspace({
                 id="boundary-kb-select"
                 value={selectedKnowledgeBase.id}
                 onChange={(event) => onSelect(event.target.value)}
-                className="h-10 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)]"
+                className="h-11 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-medium outline-none transition focus:border-[var(--accent)] lg:h-10"
               >
                 {knowledgeBases.map((knowledgeBase) => (
                   <option key={knowledgeBase.id} value={knowledgeBase.id}>
@@ -1388,7 +1497,7 @@ function BoundaryTrainingWorkspace({
           </Card>
         </div>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden shadow-[var(--shadow-soft)]">
+        <Card className="flex min-h-[560px] flex-col overflow-hidden shadow-[var(--shadow-soft)] lg:min-h-0">
           <CardHeader className="shrink-0">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
@@ -1419,7 +1528,7 @@ function BoundaryTrainingWorkspace({
               <>
                 <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-12 bg-[linear-gradient(180deg,#fff_0%,rgba(255,255,255,0)_100%)]" />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-14 bg-[linear-gradient(0deg,#fff_0%,rgba(255,255,255,0)_100%)]" />
-                <div className="boundary-preview-scroll h-full min-h-0 overflow-y-auto px-5 py-5 scroll-smooth">
+                <div className="boundary-preview-scroll h-full min-h-0 overflow-y-auto px-4 py-4 scroll-smooth sm:px-5 sm:py-5">
                   <div className="mx-auto flex max-w-[760px] flex-col gap-3">
                     <div className="sticky top-0 z-20 mb-1 rounded-2xl border border-[var(--border)] bg-white/88 px-4 py-3 shadow-sm backdrop-blur">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1479,7 +1588,7 @@ function BoundaryTrainingWorkspace({
           </CardContent>
         </Card>
 
-        <aside className="grid min-h-0 content-start gap-3 overflow-hidden xl:gap-4">
+        <aside className="grid content-start gap-3 lg:min-h-0 lg:overflow-hidden xl:gap-4">
           <Card className="overflow-hidden shadow-[var(--shadow-soft)]">
             <CardHeader className="px-4 py-2.5">
               <h2 className="text-sm font-semibold">模型训练</h2>
@@ -1493,15 +1602,15 @@ function BoundaryTrainingWorkspace({
                 id="boundary-model-name"
                 value={modelName}
                 onChange={(event) => setModelName(event.target.value)}
-                className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-semibold outline-none transition focus:border-[var(--accent)]"
+                className="h-11 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm font-semibold outline-none transition focus:border-[var(--accent)] lg:h-9"
               />
-              <div className="grid grid-cols-[1fr_112px] gap-2">
+              <div className="grid gap-2 sm:grid-cols-[1fr_112px]">
                 <label className="block">
                   <span className="mb-1 block text-[11px] font-medium text-[var(--muted)]">管理层级</span>
                   <select
                     value={modelScope}
                     onChange={(event) => setModelScope(event.target.value as "global" | "knowledge_base" | "session")}
-                    className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                    className="h-11 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)] lg:h-9"
                   >
                     <option value="knowledge_base">知识库专属</option>
                     <option value="global">全局基线</option>
@@ -1513,7 +1622,7 @@ function BoundaryTrainingWorkspace({
                   <input
                     value={modelAlias}
                     onChange={(event) => setModelAlias(event.target.value)}
-                    className="h-9 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                    className="h-11 w-full rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)] lg:h-9"
                   />
                 </label>
               </div>
@@ -1584,12 +1693,12 @@ function BoundaryTrainingWorkspace({
               <p className="text-xs text-[var(--muted)]">基于当前知识库生成候选样本</p>
             </CardHeader>
             <CardContent className="space-y-2.5 p-3">
-              <div className="grid grid-cols-[1fr_92px] gap-2">
+              <div className="grid grid-cols-[minmax(0,1fr)_92px] gap-2">
                 <input
                   value={aiHint}
                   onChange={(event) => setAiHint(event.target.value)}
                   placeholder="类别提示"
-                  className="h-9 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  className="h-11 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)] lg:h-9"
                 />
                 <input
                   type="number"
@@ -1598,7 +1707,7 @@ function BoundaryTrainingWorkspace({
                   value={aiCount}
                   aria-label="生成数量"
                   onChange={(event) => setAiCount(Math.max(1, Math.min(30, Number(event.target.value) || 1)))}
-                  className="h-9 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)]"
+                  className="h-11 rounded-md border border-[var(--border)] bg-white px-3 text-sm outline-none transition focus:border-[var(--accent)] lg:h-9"
                 />
               </div>
               <Button type="button" variant="primary" size="sm" className="w-full justify-center" onClick={generateItems} disabled={generating}>
@@ -1704,9 +1813,9 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
   }, [users]);
 
   return (
-    <section className="flex min-h-0 flex-1 overflow-hidden bg-[linear-gradient(180deg,#f8fbfc_0%,#eef5f4_100%)] px-3 py-3 sm:px-5 lg:px-6 lg:py-5">
-      <div className="mx-auto grid h-full min-h-0 w-full max-w-[1440px] gap-4">
-        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+    <section className="mobile-admin-scroll min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#f8fbfc_0%,#eef5f4_100%)] px-3 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3 sm:px-5 lg:h-full lg:overflow-hidden lg:px-6 lg:py-5">
+      <div className="mx-auto grid w-full max-w-[1440px] gap-4 lg:h-full lg:min-h-0">
+        <div className="grid gap-4 lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]">
           <div className="overflow-hidden rounded-2xl border border-white/80 bg-[linear-gradient(135deg,#ffffff_0%,#f7fbfa_58%,#edf6f4_100%)] p-4 shadow-[0_22px_70px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)] sm:p-5">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="max-w-2xl">
@@ -1732,7 +1841,7 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
             </div>
           </div>
 
-          <Card className="flex min-h-0 flex-col overflow-hidden border-white/80 bg-white/88 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+          <Card className="flex min-h-[520px] flex-col overflow-hidden border-white/80 bg-white/88 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl lg:min-h-0">
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1837,12 +1946,10 @@ function UserAvatar({
   }[size];
   if (user.avatarUrl) {
     return (
-      <Image
+      // eslint-disable-next-line @next/next/no-img-element -- User avatars can be data URLs or arbitrary remote URLs.
+      <img
         src={user.avatarUrl}
         alt=""
-        width={44}
-        height={44}
-        unoptimized
         className={cn(
           "shrink-0 rounded-full object-cover shadow-[0_14px_30px_rgba(0,108,99,0.22)]",
           sizeClass,
@@ -1933,6 +2040,7 @@ function ProductSidebar({
   onOpenSession,
   user,
   isAdmin,
+  isMobileLayout,
   activeView,
   collapsed,
   onChangeView,
@@ -1949,6 +2057,7 @@ function ProductSidebar({
   onOpenSession: (sessionId: string) => void;
   user: AuthUser;
   isAdmin: boolean;
+  isMobileLayout: boolean;
   activeView: WorkspaceView;
   collapsed: boolean;
   onChangeView: (view: WorkspaceView) => void;
@@ -1956,10 +2065,11 @@ function ProductSidebar({
   onSignOut: () => void;
   onOpenSettings: () => void;
 }) {
-  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || (isAdmin && !isMobileLayout));
   const [hoveringLogo, setHoveringLogo] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const showMobileSidebarContent = open;
 
   useEffect(() => {
     if (!accountMenuOpen) {
@@ -1998,45 +2108,57 @@ function ProductSidebar({
     <>
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/30 lg:hidden",
+          "fixed inset-0 z-40 bg-white/0 lg:hidden",
           open ? "block" : "hidden",
         )}
         onClick={onClose}
       />
       <aside
         className={cn(
-          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col overflow-hidden border-r border-[var(--border)] bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] shadow-xl transition-all duration-300 ease-out lg:relative lg:z-[90] lg:h-full lg:translate-x-0 lg:overflow-visible lg:shadow-none",
+          "product-sidebar fixed inset-y-0 left-0 z-50 flex w-full max-w-[430px] flex-col overflow-hidden bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] transition-all duration-300 ease-out lg:relative lg:z-[90] lg:h-full lg:w-[292px] lg:max-w-none lg:translate-x-0 lg:overflow-visible lg:border-r lg:border-[var(--border)] lg:bg-[linear-gradient(180deg,#fbfdfe_0%,#f3f8fa_100%)] lg:shadow-none",
+          isMobileLayout ? "max-w-none shadow-none" : "",
           collapsed ? "product-sidebar--collapsed" : "",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className={cn("flex h-16 shrink-0 items-center border-b border-[var(--border)] px-3", collapsed ? "lg:justify-center" : "justify-between")}>
+        <div className={cn("flex h-[92px] shrink-0 items-center px-6 pt-[calc(env(safe-area-inset-top)+14px)] lg:h-16 lg:border-b lg:border-[var(--border)] lg:px-3 lg:pt-0", collapsed ? "lg:justify-center" : "justify-between")}>
           {collapsed ? (
-            <button
-              type="button"
-              className="group relative hidden h-11 w-11 items-center justify-center rounded-2xl bg-white text-[var(--accent-strong)] shadow-sm ring-1 ring-[var(--border)] transition hover:-translate-y-0.5 hover:bg-[var(--accent-tint)] hover:shadow-md lg:flex"
-              onMouseEnter={() => setHoveringLogo(true)}
-              onMouseLeave={() => setHoveringLogo(false)}
-              onFocus={() => setHoveringLogo(true)}
-              onBlur={() => setHoveringLogo(false)}
-              onClick={onToggleCollapse}
-              aria-label="展开侧栏"
-              title="展开侧栏"
-            >
-              <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
-                <Image src="/images/icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-xl object-cover" aria-hidden="true" />
-              </span>
-              <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
-                <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
-              </span>
-              <IconTooltip label="展开侧栏" />
-            </button>
+            <>
+              {showMobileSidebarContent ? (
+                <div className="flex min-w-0 items-center gap-3 lg:hidden">
+                  <Image src="/images/icon.png" alt="" width={38} height={38} className="h-9.5 w-9.5 shrink-0 rounded-xl object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <h2 className="truncate text-[22px] font-semibold leading-tight tracking-normal text-slate-950">{PRODUCT_NAME}</h2>
+                    <p className="mt-0.5 truncate text-[12px] font-medium text-slate-400">知识问答中枢</p>
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="group relative hidden h-11 w-11 items-center justify-center rounded-2xl bg-white text-[var(--accent-strong)] shadow-sm ring-1 ring-[var(--border)] transition hover:-translate-y-0.5 hover:bg-[var(--accent-tint)] hover:shadow-md lg:flex"
+                onMouseEnter={() => setHoveringLogo(true)}
+                onMouseLeave={() => setHoveringLogo(false)}
+                onFocus={() => setHoveringLogo(true)}
+                onBlur={() => setHoveringLogo(false)}
+                onClick={onToggleCollapse}
+                aria-label="展开侧栏"
+                title="展开侧栏"
+              >
+                <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-75 opacity-0" : "scale-100 opacity-100")}>
+                  <Image src="/images/icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-xl object-cover" aria-hidden="true" />
+                </span>
+                <span className={cn("absolute transition duration-200", hoveringLogo ? "scale-100 opacity-100" : "scale-75 opacity-0")}>
+                  <PanelLeftClose className="rotate-180" size={20} aria-hidden="true" />
+                </span>
+                <IconTooltip label="展开侧栏" />
+              </button>
+            </>
           ) : (
             <div className="flex min-w-0 items-center gap-3">
-              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover shadow-md shadow-teal-950/10" aria-hidden="true" />
+              <Image src="/images/icon.png" alt="" width={40} height={40} className="h-9 w-9 shrink-0 rounded-xl object-cover shadow-md shadow-teal-950/10 lg:h-10 lg:w-10 lg:rounded-lg" aria-hidden="true" />
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">{PRODUCT_NAME}</h2>
-                <p className="truncate text-xs text-[var(--muted)]">产业级知识问答中枢</p>
+                <h2 className="truncate text-[22px] font-semibold leading-tight tracking-normal text-slate-950 lg:text-base">{PRODUCT_NAME}</h2>
+                <p className="truncate text-[12px] font-medium text-slate-400 lg:text-xs lg:font-normal lg:text-[var(--muted)]">产业级知识问答中枢</p>
               </div>
             </div>
           )}
@@ -2053,30 +2175,40 @@ function ProductSidebar({
           ) : null}
           <button
             type="button"
-            className="rounded-md p-2 text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.08)] transition hover:bg-[var(--panel-strong)] lg:hidden"
             onClick={onClose}
             aria-label="关闭导航"
           >
-            <X size={17} aria-hidden="true" />
+            <X size={22} strokeWidth={2.2} aria-hidden="true" />
           </button>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className={cn("shrink-0 px-3 py-3", collapsed ? "lg:px-2" : "")}>
+          <div className={cn("shrink-0 px-6 py-2 lg:px-3 lg:py-3", collapsed ? "lg:px-2" : "")}>
             {collapsed ? (
-              <button
-                type="button"
-                onClick={onNewSession}
-                className="group relative hidden h-10 w-full items-center justify-center rounded-lg text-slate-700 transition hover:bg-white hover:text-slate-950 hover:shadow-sm lg:flex"
-                aria-label="新建问答"
-              >
-                <PenLine size={18} strokeWidth={2.1} aria-hidden="true" />
-                <IconTooltip label="新建问答" />
-              </button>
+              <>
+                {showMobileSidebarContent ? (
+                  <Button type="button" variant="ghost" className="h-[46px] w-full justify-start rounded-full bg-[#f1f1f1] px-5 text-[16px] font-medium text-slate-950 shadow-none hover:bg-[#e9e9e9] lg:hidden" onClick={onNewSession}>
+                    <PenLine size={21} aria-hidden="true" />
+                    <span>发起新对话</span>
+                  </Button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={onNewSession}
+                  className="group relative hidden h-10 w-full items-center justify-center rounded-lg text-slate-700 transition hover:bg-white hover:text-slate-950 hover:shadow-sm lg:flex"
+                  aria-label="新建问答"
+                >
+                  <PenLine size={18} strokeWidth={2.1} aria-hidden="true" />
+                  <IconTooltip label="新建问答" />
+                </button>
+              </>
             ) : (
-              <Button type="button" variant="primary" className="w-full justify-center" onClick={onNewSession}>
-                <Plus size={15} aria-hidden="true" />
-                新建问答
+              <Button type="button" variant="ghost" className="h-[46px] w-full justify-start rounded-full bg-[#f1f1f1] px-5 text-[16px] font-medium text-slate-950 shadow-none hover:bg-[#e9e9e9] lg:h-10 lg:justify-center lg:rounded-md lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)] lg:px-3 lg:text-sm lg:text-white lg:shadow-sm" onClick={onNewSession}>
+                <PenLine size={21} className="lg:hidden" aria-hidden="true" />
+                <Plus size={15} className="hidden lg:block" aria-hidden="true" />
+                <span className="lg:hidden">发起新对话</span>
+                <span className="hidden lg:inline">新建问答</span>
               </Button>
             )}
 
@@ -2106,7 +2238,7 @@ function ProductSidebar({
                     type="button"
                     onClick={() => onChangeView(item.id)}
                     className={cn(
-                      "flex h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all",
+                      "hidden h-10 w-full items-center justify-between rounded-md px-3 text-sm font-medium transition-all lg:flex",
                       active
                         ? "border border-[var(--accent-soft)] bg-[linear-gradient(90deg,var(--accent-soft)_0%,rgba(255,255,255,0.72)_100%)] text-[var(--accent-strong)] shadow-sm"
                         : "text-[var(--muted)] hover:bg-[var(--panel-strong)] hover:text-[var(--foreground)]",
@@ -2127,8 +2259,8 @@ function ProductSidebar({
             </nav>
           </div>
 
-          <div className={cn("min-h-0 flex-1 overflow-y-auto px-3 pb-4", collapsed ? "lg:hidden" : "")}>
-            <div>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-8 lg:px-3 lg:pt-0", collapsed ? "lg:hidden" : "")}>
+            <div className="hidden lg:block">
               <div className="mb-2 flex items-center justify-between px-1">
                 <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">当前会话</h3>
                 <History size={14} className="text-[var(--muted)]" aria-hidden="true" />
@@ -2141,23 +2273,23 @@ function ProductSidebar({
               </div>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-5 lg:mt-5">
               <div className="mb-2 flex items-center justify-between px-1">
-                <h3 className="text-xs font-semibold uppercase text-[var(--muted)]">历史会话</h3>
-                <Search size={14} className="text-[var(--muted)]" aria-hidden="true" />
+                <h3 className="text-[16px] font-medium text-slate-400 lg:text-xs lg:font-semibold lg:uppercase lg:text-[var(--muted)]">最近</h3>
+                <History size={14} className="hidden text-[var(--muted)] lg:block" aria-hidden="true" />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 lg:space-y-2">
                 {sessions.length ? sessions.map((session) => (
                   <button
                     key={session.id}
                     type="button"
                     onClick={() => onOpenSession(session.id)}
-                    className="w-full rounded-md border border-[var(--border)] bg-white/72 px-3 py-2 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+                    className="w-full rounded-2xl bg-white px-0 py-2 text-left text-slate-950 transition hover:bg-[var(--panel-muted)] lg:rounded-md lg:border lg:border-[var(--border)] lg:bg-white/72 lg:px-3 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
                   >
-                    <span className="block truncate text-sm text-[var(--foreground)]">
+                    <span className="block truncate text-[16px] font-semibold lg:text-sm lg:font-normal lg:text-[var(--foreground)]">
                       {session.title}
                     </span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+                    <span className="mt-1 flex items-center justify-between gap-2 text-[13px] text-slate-500 lg:text-xs lg:text-[var(--muted)]">
                       <span>{formatRelativeTime(session.updatedAt)}</span>
                       <span className="min-w-0 truncate">
                         {session.knowledgeBaseName ?? `${session.turnCount} 轮`}
@@ -2165,8 +2297,8 @@ function ProductSidebar({
                     </span>
                   </button>
                 )) : (
-                  <div className="rounded-lg border border-dashed border-[var(--border)] bg-white/58 px-3 py-4 text-sm text-[var(--muted)]">
-                    完成一次问答后，会话会自动保存在这里。
+                  <div className="rounded-2xl bg-white/58 px-0 py-4 text-[16px] font-semibold text-slate-950 lg:rounded-lg lg:border lg:border-dashed lg:border-[var(--border)] lg:px-3 lg:text-sm lg:font-normal lg:text-[var(--muted)]">
+                    暂无最近对话
                   </div>
                 )}
               </div>
@@ -2176,7 +2308,7 @@ function ProductSidebar({
 
         <div
           ref={accountMenuRef}
-          className={cn("relative shrink-0 border-t border-[var(--border)] p-3", collapsed ? "lg:px-2" : "")}
+          className={cn("relative shrink-0 px-6 pb-[calc(env(safe-area-inset-bottom)+22px)] pt-4 lg:border-t lg:border-[var(--border)] lg:p-3", collapsed ? "lg:px-2" : "")}
         >
           {accountMenuOpen ? (
             <AccountMenu
@@ -2187,33 +2319,58 @@ function ProductSidebar({
             />
           ) : null}
           {collapsed ? (
-            <button
-              type="button"
-              onClick={() => setAccountMenuOpen((value) => !value)}
-              className="group relative hidden h-10 w-full items-center justify-center rounded-lg bg-white text-[var(--accent-strong)] shadow-sm transition hover:bg-[var(--panel-strong)] lg:flex"
-              aria-label={`${user.name} · 账户菜单`}
-              aria-expanded={accountMenuOpen}
-            >
-              <UserAvatar user={user} size="xs" className="shadow-none" />
-              <IconTooltip label={`${user.name} · 账户菜单`} />
-            </button>
+            <>
+              {showMobileSidebarContent ? (
+                <button
+                  type="button"
+                  onClick={() => setAccountMenuOpen((value) => !value)}
+                  className="w-full rounded-2xl bg-white p-0 text-left transition hover:bg-[var(--panel-muted)] lg:hidden"
+                  aria-label={`${user.name} · 账户菜单`}
+                  aria-expanded={accountMenuOpen}
+                >
+                  <div className="flex items-center gap-4">
+                    <UserAvatar user={user} size="sm" className="shadow-none" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[19px] font-semibold text-slate-950">{user.name}</p>
+                    </div>
+                    <Settings size={25} className="shrink-0 text-slate-950" aria-hidden="true" />
+                  </div>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setAccountMenuOpen((value) => !value)}
+                className="group relative hidden h-10 w-full items-center justify-center rounded-lg bg-white text-[var(--accent-strong)] shadow-sm transition hover:bg-[var(--panel-strong)] lg:flex"
+                aria-label={`${user.name} · 账户菜单`}
+                aria-expanded={accountMenuOpen}
+              >
+                <UserAvatar user={user} size="xs" className="shadow-none" />
+                <IconTooltip label={`${user.name} · 账户菜单`} />
+              </button>
+            </>
           ) : (
             <button
               type="button"
               onClick={() => setAccountMenuOpen((value) => !value)}
-              className="w-full rounded-lg border border-[var(--border)] bg-white/82 p-3 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-white"
+              className="w-full rounded-2xl bg-white p-0 text-left transition hover:bg-[var(--panel-muted)] lg:rounded-lg lg:border lg:border-[var(--border)] lg:bg-white/82 lg:p-3 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
               aria-label={`${user.name} · 账户菜单`}
               aria-expanded={accountMenuOpen}
             >
-              <div className="flex items-center gap-2">
-                <UserAvatar user={user} size="sm" className="shadow-none" />
+              <div className="flex items-center gap-4 lg:gap-2">
+                <span className="flex lg:hidden">
+                  <UserAvatar user={user} size="sm" className="shadow-none" />
+                </span>
+                <span className="hidden lg:flex">
+                  <UserAvatar user={user} size="sm" className="shadow-none" />
+                </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{user.name}</p>
-                  <p className="truncate text-xs text-[var(--muted)]">
+                  <p className="truncate text-[19px] font-semibold text-slate-950 lg:text-sm lg:text-[var(--foreground)]">{user.name}</p>
+                  <p className="hidden truncate text-xs text-[var(--muted)] lg:block">
                     {user.role === "admin" ? "管理员" : "普通用户"} · {user.email}
                   </p>
                 </div>
-                <ChevronRight size={16} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
+                <Settings size={25} className="shrink-0 text-slate-950 lg:hidden" aria-hidden="true" />
+                <ChevronRight size={16} className="hidden shrink-0 text-[var(--muted)] lg:block" aria-hidden="true" />
               </div>
             </button>
           )}
@@ -2407,19 +2564,19 @@ function AccountSettingsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/18 px-4 py-6 backdrop-blur-md">
-      <div className="h-[min(650px,calc(100vh-3rem))] w-full max-w-[980px] overflow-hidden rounded-[28px] border border-white/85 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
-        <div className="grid h-full min-h-0 grid-cols-[230px_minmax(0,1fr)]">
-          <aside className="border-r border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f5faf9_100%)] p-4">
+    <div className="fixed inset-0 z-[120] grid place-items-end bg-slate-950/18 px-0 py-0 backdrop-blur-md lg:place-items-center lg:px-4 lg:py-6">
+      <div className="h-[100svh] w-full overflow-hidden rounded-none border-0 bg-white/96 shadow-[0_40px_120px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl lg:h-[min(650px,calc(100vh-3rem))] lg:max-w-[980px] lg:rounded-[28px] lg:border lg:border-white/85 lg:bg-white/92">
+        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[230px_minmax(0,1fr)] lg:grid-rows-1">
+          <aside className="border-b border-[var(--border)] bg-white/92 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+14px)] lg:border-b-0 lg:border-r lg:bg-[linear-gradient(180deg,#ffffff_0%,#f5faf9_100%)] lg:p-4">
             <button
               type="button"
               onClick={onClose}
-              className="mb-6 flex h-9 w-9 items-center justify-center rounded-xl text-[var(--foreground)] transition hover:bg-[var(--panel-strong)]"
+              className="mb-4 flex h-11 w-11 items-center justify-center rounded-full text-[var(--foreground)] transition hover:bg-[var(--panel-strong)] lg:mb-6 lg:h-9 lg:w-9 lg:rounded-xl"
               aria-label="关闭设置"
             >
               <X size={20} aria-hidden="true" />
             </button>
-            <div className="rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm">
+            <div className="hidden rounded-2xl border border-white/80 bg-white/78 p-3 shadow-sm lg:block">
               <div className="flex items-center gap-3">
                 <UserAvatar user={user} size="lg" className="shadow-none" />
                 <div className="min-w-0">
@@ -2428,12 +2585,12 @@ function AccountSettingsModal({
                 </div>
               </div>
             </div>
-            <nav className="mt-5 space-y-2">
+            <nav className="flex gap-2 overflow-x-auto lg:mt-5 lg:block lg:space-y-2 lg:overflow-visible">
               <button
                 type="button"
                 onClick={() => setActivePanel("profile")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "profile"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2446,7 +2603,7 @@ function AccountSettingsModal({
                 type="button"
                 onClick={() => setActivePanel("settings")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "settings"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2459,7 +2616,7 @@ function AccountSettingsModal({
                 type="button"
                 onClick={() => setActivePanel("connection")}
                 className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm transition",
+                  "flex h-11 min-w-fit items-center gap-3 rounded-full px-4 text-left text-sm transition lg:h-10 lg:w-full lg:rounded-xl lg:px-3",
                   activePanel === "connection"
                     ? "bg-[var(--panel-strong)] font-semibold text-[var(--foreground)]"
                     : "text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2472,14 +2629,14 @@ function AccountSettingsModal({
           </aside>
 
           <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-            <header className="border-b border-[var(--border)] px-7 py-5">
+            <header className="border-b border-[var(--border)] px-5 py-4 lg:px-7 lg:py-5">
               <h2 className="text-xl font-semibold tracking-normal">{activePanel === "profile" ? "个人资料" : activePanel === "settings" ? "服务设置" : "连接测试"}</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
                 {activePanel === "profile" ? "昵称与头像" : activePanel === "settings" ? "API 与 URL" : "验证当前配置是否可访问"}
               </p>
             </header>
 
-            <div className="min-h-0 overflow-hidden p-5">
+            <div className="min-h-0 overflow-y-auto p-4 pb-[calc(env(safe-area-inset-bottom)+20px)] lg:overflow-hidden lg:p-5">
               {activePanel === "profile" ? (
                 <ProfileSettingsCard
                   user={{ ...user, name: profileName, avatarUrl: profileAvatar || null }}
@@ -2748,65 +2905,152 @@ function ConnectivityCard({
   );
 }
 
-function UserGuideModal({ onClose }: { onClose: () => void }) {
+function UserGuideModal({
+  desktopMode = false,
+  onClose,
+}: {
+  desktopMode?: boolean;
+  onClose: () => void;
+}) {
+  type GuideEdition = "web" | "desktop";
   type GuideSection = {
     id: string;
     title: string;
     icon: typeof Settings;
     steps: string[];
   };
-  const guideSections: GuideSection[] = [
-    {
-      id: "start",
-      title: "开始使用",
-      icon: Database,
-      steps: [
-        "登录后直接进入问答工作台。",
-        "选择可用知识库，输入问题并发送。",
-        "回答下方会显示引用来源，便于核对依据。",
-      ],
-    },
-    {
-      id: "connection",
-      title: "服务状态",
-      icon: HeartPulse,
-      steps: [
-        "顶部状态显示在线时，可以正常提问。",
-        "如果显示离线，请等待管理员恢复服务。",
-        `如果一直离线，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
-      ],
-    },
-    {
-      id: "faq",
-      title: "常见问题",
-      icon: ShieldCheck,
-      steps: [
-        `无法登录或无可用知识库时，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
-        "回答没有引用来源时，调整问题范围或请管理员确认索引是否完成。",
-        "页面显示离线时，请稍后重试或联系管理员。",
-      ],
-    },
+  const [activeEdition, setActiveEdition] = useState<GuideEdition>(desktopMode ? "desktop" : "web");
+  const defaultSectionByEdition: Record<GuideEdition, string> = {
+    web: "start",
+    desktop: "api",
+  };
+  const [activeSectionId, setActiveSectionId] = useState(defaultSectionByEdition[desktopMode ? "desktop" : "web"]);
+  const editionOptions: Array<{ id: GuideEdition; label: string }> = [
+    { id: "web", label: "网页版" },
+    { id: "desktop", label: "Windows APP 版" },
   ];
-  const [activeSectionId, setActiveSectionId] = useState(guideSections[0].id);
+  const guideByEdition: Record<GuideEdition, GuideSection[]> = {
+    web: [
+      {
+        id: "start",
+        title: "开始使用",
+        icon: Database,
+        steps: [
+          "登录后直接进入问答工作台。",
+          "选择可用知识库，输入问题并发送。",
+          "回答下方会显示引用来源，便于核对依据。",
+        ],
+      },
+      {
+        id: "connection",
+        title: "服务状态",
+        icon: HeartPulse,
+        steps: [
+          "顶部状态显示在线时，可以正常提问。",
+          "如果显示离线，请等待管理员恢复服务。",
+          `如果一直离线，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
+        ],
+      },
+      {
+        id: "faq",
+        title: "常见问题",
+        icon: ShieldCheck,
+        steps: [
+          `无法登录或无可用知识库时，请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
+          "回答没有引用来源时，调整问题范围或请管理员确认索引是否完成。",
+          "页面显示离线时，请稍后重试或联系管理员。",
+        ],
+      },
+    ],
+    desktop: [
+      {
+        id: "api",
+        title: "填写 API Key",
+        icon: Settings,
+        steps: [
+          "打开设置，API 配置统一参考 DeepSeek 文档：https://api-docs.deepseek.com/。",
+          "只填写 API Key，其余配置保持默认。",
+          "保存配置后进入“连通性测试”。",
+        ],
+      },
+      {
+        id: "models",
+        title: "下载和启用模型",
+        icon: Database,
+        steps: [
+          "进入“模型”，选择嵌入模型并点击下载。",
+          "下载完成后点击启用；需要轻量检索时切回轻量模式。",
+          "下载失败时检查网络、代理和磁盘空间。",
+        ],
+      },
+      {
+        id: "connection",
+        title: "连通性测试",
+        icon: HeartPulse,
+        steps: [
+          "先测试 RAG 服务，再测试模型 API。",
+          "两项都可用后，即可开始提问。",
+          "失败时重启 APP，或检查 API Key 和网络代理。",
+        ],
+      },
+      {
+        id: "faq",
+        title: "常见问题",
+        icon: ShieldCheck,
+        steps: [
+          "APP 打不开：发送安装包，不要只发送 win-unpacked 里的 exe。",
+          "模型/API 报错：检查 API Key、网络和服务额度。",
+          `无法解决的问题请联系管理员：${ADMIN_CONTACT_EMAIL}。`,
+        ],
+      },
+    ],
+  };
+  const guideSections = guideByEdition[activeEdition];
   const activeSection = guideSections.find((section) => section.id === activeSectionId) ?? guideSections[0];
   const ActiveIcon = activeSection.icon;
 
   return (
-    <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/18 px-4 py-5 backdrop-blur-md">
-      <div className="flex h-[min(680px,calc(100vh-2rem))] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-white/85 bg-white/95 shadow-[0_34px_90px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
+    <div className="fixed inset-0 z-[130] grid place-items-end bg-slate-950/18 px-0 py-0 backdrop-blur-md lg:place-items-center lg:px-4 lg:py-5">
+      <div className="flex h-[100svh] w-full flex-col overflow-hidden rounded-none border-0 bg-white/97 shadow-[0_34px_90px_rgba(15,23,42,0.22),inset_0_1px_0_rgba(255,255,255,0.96)] backdrop-blur-2xl lg:h-[min(680px,calc(100vh-2rem))] lg:max-w-[920px] lg:rounded-2xl lg:border lg:border-white/85 lg:bg-white/95">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] px-5 pb-4 pt-[calc(env(safe-area-inset-top)+16px)] lg:py-4">
           <div className="flex min-w-0 items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
               <HelpCircle size={18} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold tracking-normal">用户使用说明</h2>
+              <h2 className="text-xl font-semibold tracking-normal">使用说明</h2>
             </div>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} title="关闭使用说明" aria-label="关闭使用说明">
             <X size={18} aria-hidden="true" />
           </Button>
         </header>
+
+        <div className="shrink-0 border-b border-[var(--border)] bg-white/72 px-4 py-3">
+          <div className="grid max-w-[420px] grid-cols-2 rounded-full border border-[var(--border)] bg-white p-1 shadow-sm lg:rounded-xl">
+            {editionOptions.map((edition) => {
+              const active = edition.id === activeEdition;
+              return (
+                <button
+                  key={edition.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveEdition(edition.id);
+                    setActiveSectionId(defaultSectionByEdition[edition.id]);
+                  }}
+                  className={cn(
+                    "h-10 rounded-full px-3 text-sm font-semibold transition lg:h-9 lg:rounded-lg",
+                    active
+                      ? "bg-[var(--accent-tint)] text-[var(--accent-strong)] shadow-sm"
+                      : "text-[var(--muted)] hover:bg-[var(--panel-muted)] hover:text-[var(--foreground)]",
+                  )}
+                >
+                  {edition.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
           <aside className="border-b border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbfa_100%)] p-3 lg:border-b-0 lg:border-r">
@@ -2820,7 +3064,7 @@ function UserGuideModal({ onClose }: { onClose: () => void }) {
                     type="button"
                     onClick={() => setActiveSectionId(section.id)}
                     className={cn(
-                      "flex min-w-[150px] items-center gap-3 rounded-xl border px-3 py-3 text-left transition lg:min-w-0 lg:w-full",
+                      "flex min-w-[150px] items-center gap-3 rounded-full border px-3 py-3 text-left transition lg:min-w-0 lg:w-full lg:rounded-xl",
                       active
                         ? "border-[var(--accent-soft)] bg-white font-semibold text-[var(--foreground)] shadow-[0_10px_28px_rgba(15,23,42,0.08)]"
                         : "border-transparent text-[var(--muted)] hover:bg-white/70 hover:text-[var(--foreground)]",
@@ -2839,8 +3083,8 @@ function UserGuideModal({ onClose }: { onClose: () => void }) {
             </div>
           </aside>
 
-          <main className="min-h-0 overflow-y-auto p-4 sm:p-5">
-            <section className="min-h-full rounded-xl border border-[var(--border)] bg-white/88 p-4 shadow-sm sm:p-5">
+          <main className="min-h-0 overflow-y-auto p-4 pb-[calc(env(safe-area-inset-bottom)+20px)] sm:p-5">
+            <section className="min-h-full rounded-2xl border border-[var(--border)] bg-white/88 p-4 shadow-sm sm:p-5 lg:rounded-xl">
               <div className="flex items-center gap-3 border-b border-[var(--border)] pb-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-tint)] text-[var(--accent-strong)]">
                   <ActiveIcon size={20} aria-hidden="true" />
@@ -2852,7 +3096,7 @@ function UserGuideModal({ onClose }: { onClose: () => void }) {
 
               <ol className="mt-5 space-y-3">
                 {activeSection.steps.map((step, index) => (
-                  <li key={step} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] px-3 py-3">
+                  <li key={step} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-2xl border border-[var(--border)] bg-[linear-gradient(145deg,#ffffff_0%,#f7fbfa_100%)] px-3 py-3 lg:rounded-xl">
                     <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--panel-strong)] text-sm font-semibold text-[var(--accent-strong)]">
                       {index + 1}
                     </span>
@@ -2884,16 +3128,17 @@ function ProductHeader({
   onOpenHelp: () => void;
 }) {
   return (
-    <header className="z-30 shrink-0 border-b border-[var(--border)] bg-white/78 backdrop-blur-xl">
-      <div className="flex h-12 items-center justify-between gap-3 px-3 sm:px-5 lg:px-5">
+    <header className="z-30 shrink-0 bg-white/0 backdrop-blur-xl lg:border-b lg:border-[var(--border)] lg:bg-white/78">
+      <div className="flex h-[72px] items-center justify-between gap-3 px-5 pt-[env(safe-area-inset-top)] lg:h-12 lg:px-5 lg:pt-0">
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--panel-strong)] lg:hidden"
+            className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/88 text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.10)] ring-1 ring-white/80 transition hover:bg-white lg:hidden"
             onClick={onOpenSidebar}
             aria-label="打开导航"
           >
-            <Menu size={18} aria-hidden="true" />
+            <Menu size={24} strokeWidth={2.2} aria-hidden="true" />
+            {!healthOk ? <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" /> : null}
           </button>
           <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 shadow-sm md:flex">
             <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
@@ -2903,8 +3148,10 @@ function ProductHeader({
             </span>
           </div>
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">{PRODUCT_NAME} 工作台</p>
-            <p className="truncate text-xs text-[var(--muted)]">可信知识库问答</p>
+            <div className="inline-flex h-12 max-w-[210px] items-center gap-2 rounded-full bg-white/84 px-5 text-lg font-semibold tracking-normal text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80">
+              <span className="truncate">{PRODUCT_NAME}</span>
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", healthOk ? "bg-[var(--info)]" : "bg-[var(--danger)]")} aria-hidden="true" />
+            </div>
           </div>
         </div>
 
@@ -2913,11 +3160,11 @@ function ProductHeader({
             <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
             <span className="font-medium text-[var(--accent-strong)]">正常</span>
           </div>
-          <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-8 w-8" onClick={onOpenHelp}>
-            <HelpCircle size={16} aria-hidden="true" />
+          <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-12 w-12 rounded-full bg-white/84 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80 hover:bg-white lg:h-8 lg:w-8 lg:rounded-md lg:bg-transparent lg:shadow-none lg:ring-0" onClick={onOpenHelp}>
+            <HelpCircle size={22} className="lg:h-4 lg:w-4" aria-hidden="true" />
           </Button>
           <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
-          <Button type="button" variant="secondary" size="sm" className="h-8 rounded-full" title={`${user.name} · 退出登录`} onClick={onSignOut}>
+          <Button type="button" variant="secondary" size="sm" className="hidden h-8 rounded-full sm:inline-flex" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
           </Button>
@@ -2937,7 +3184,7 @@ function IconTooltip({ label }: { label: string }) {
 
 function HealthPill({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <div className="flex h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm">
+    <div className="hidden h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm sm:flex">
       <HeartPulse size={14} className={ok ? "text-[var(--accent)]" : "text-[var(--danger)]"} />
       <span className="hidden max-w-[120px] truncate text-[var(--muted)] sm:inline">{label}</span>
       <span className={ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}>
@@ -3063,15 +3310,15 @@ function KnowledgeBaseSelect({
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative hidden sm:block">
+    <div ref={containerRef} className="relative block min-w-0">
       <button
         type="button"
         aria-label="选择知识库"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="group flex h-11 max-w-[260px] items-center gap-2 rounded-full border border-white/80 bg-white/86 px-4 text-sm font-semibold text-[var(--foreground)] shadow-[0_14px_36px_rgba(15,23,42,0.10)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-white hover:bg-white hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)]"
+        className="group flex h-10 w-full min-w-0 items-center gap-1.5 rounded-full border border-white/82 bg-white/74 px-3 text-sm font-semibold text-[var(--foreground)] shadow-[0_12px_30px_rgba(15,23,42,0.07)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:border-white hover:bg-white hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)] lg:h-11 lg:max-w-[260px] lg:gap-2 lg:bg-white/86 lg:px-4 lg:text-sm"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--accent-soft)] bg-white text-[var(--accent)]">
+        <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--accent-soft)] bg-white text-[var(--accent)] sm:flex">
           <Database size={16} aria-hidden="true" />
         </span>
         <span className="truncate">{selectedKnowledgeBase.name}</span>
@@ -3085,7 +3332,7 @@ function KnowledgeBaseSelect({
         />
       </button>
       {open ? (
-        <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-72 overflow-hidden rounded-3xl border border-white/80 bg-white/96 p-2 shadow-[0_28px_80px_rgba(15,23,42,0.18)] backdrop-blur-2xl">
+        <div className="absolute left-0 right-0 top-[calc(100%+10px)] z-50 min-w-[min(82vw,18rem)] overflow-hidden rounded-3xl border border-white/80 bg-white/90 p-2 shadow-[0_28px_80px_rgba(15,23,42,0.18)] backdrop-blur-2xl lg:left-auto lg:right-0 lg:w-72 lg:bg-white/96">
           <div className="px-3 py-2">
             <p className="text-xs font-medium text-[var(--muted)]">当前知识库</p>
           </div>
@@ -3351,18 +3598,33 @@ function StatusBadge({ status }: { status: "idle" | "streaming" | "error" }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({
+  user,
+  selectedKnowledgeBase,
+  compact = false,
+}: {
+  user: AuthUser;
+  selectedKnowledgeBase: KnowledgeBase;
+  compact?: boolean;
+}) {
+  const firstName = user.name?.trim() || user.email.split("@", 1)[0] || "你好";
   return (
-    <div className="mx-auto flex h-full min-h-[420px] max-w-3xl flex-col items-center justify-center px-4 py-10 text-center">
-      <div className="rounded-[28px] border border-white/72 bg-white/54 px-8 py-7 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--accent-soft)] bg-white/82 text-[var(--accent-strong)] shadow-sm">
-          <Sparkles size={20} aria-hidden="true" />
+    <div
+      className={cn(
+        "mobile-empty-state mx-auto flex h-full min-h-[420px] max-w-3xl flex-col items-center justify-center px-4 text-center lg:py-10",
+        compact ? "mobile-empty-state--compact" : "",
+      )}
+    >
+      <div className="lg:rounded-[28px] lg:border lg:border-white/72 lg:bg-white/54 lg:px-8 lg:py-7 lg:shadow-[0_24px_80px_rgba(15,23,42,0.08)] lg:backdrop-blur-xl">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-white/76 shadow-sm ring-1 ring-white/80 lg:mb-4 lg:h-12 lg:w-12 lg:border lg:border-[var(--accent-soft)] lg:bg-white/82 lg:text-[var(--accent-strong)]">
+          <Image src="/images/icon.png" alt="" width={56} height={56} className="h-14 w-14 object-cover lg:hidden" aria-hidden="true" />
+          <Sparkles size={21} className="hidden lg:block" aria-hidden="true" />
         </div>
-        <h2 className="text-2xl font-semibold tracking-normal sm:text-[30px]">
-          有什么需要查询？
+        <h2 className="text-[30px] font-semibold leading-tight tracking-normal text-slate-950 sm:text-[34px] lg:text-[30px]">
+          {firstName}，想聊点什么？
         </h2>
-        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">
-          输入问题后，系统会自动检索知识库、生成回答并保留可追溯引用。
+        <p className="mx-auto mt-4 max-w-[300px] text-sm leading-6 text-[var(--muted)] lg:max-w-md">
+          当前使用 {selectedKnowledgeBase.name}
         </p>
       </div>
     </div>
@@ -3383,33 +3645,36 @@ function MessageBubble({
   onToggleFavorite: () => void;
 }) {
   const isUser = message.role === "user";
+  const sourceByIndex = new Map((message.sources ?? []).map((source) => [source.index, source]));
   return (
-    <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex gap-2.5 lg:gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser ? (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur">
+        <div className="mt-1 hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur sm:flex">
           <Bot size={17} aria-hidden="true" />
         </div>
       ) : null}
       <article
         className={cn(
-          "group max-w-[min(720px,92%)] text-[15px] leading-7",
+          "group max-w-[min(720px,94%)] text-[15px] leading-7 lg:max-w-[min(720px,92%)]",
           isUser
-            ? "rounded-3xl border border-[var(--accent-soft)] bg-white/78 px-5 py-3 text-[var(--foreground)] shadow-sm backdrop-blur"
+            ? "rounded-[24px] bg-white/86 px-4 py-2.5 text-[var(--foreground)] shadow-sm backdrop-blur lg:rounded-3xl lg:border lg:border-[var(--accent-soft)] lg:bg-white/78 lg:px-5 lg:py-3"
             : "text-[var(--foreground)]",
         )}
       >
-        <div className="whitespace-pre-wrap break-words">{message.content || "..."}</div>
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words">{message.content || "..."}</div>
+        ) : (
+          <AssistantMarkdown content={message.content || "..."} sourceByIndex={sourceByIndex} />
+        )}
         {!isUser && message.sources?.length ? (
-          <div className="mt-4 flex flex-wrap gap-1.5 text-xs text-[var(--accent-strong)]">
+          <div className="mt-4 flex flex-wrap gap-1.5 text-xs text-[var(--accent-strong)] lg:hidden">
             {message.sources.map((source) => (
-              <span key={source.chunk_id} className="rounded-full border border-[var(--accent-soft)] bg-white/72 px-2 py-0.5">
-                [{source.index}] {source.title}
-              </span>
+              <CitationPopover key={source.chunk_id} index={source.index} source={source} showTitle />
             ))}
           </div>
         ) : null}
         {!isUser ? (
-          <div className="mt-3 flex items-center gap-1 text-[var(--muted)] opacity-75 transition group-hover:opacity-100">
+          <div className="mt-3 flex flex-wrap items-center gap-1 text-[var(--muted)] opacity-75 transition group-hover:opacity-100">
             <IconAction label={copied ? "已复制" : "复制回答"} onClick={onCopy} icon={Copy} />
             <IconAction
               label={message.favorite ? "已收藏" : "收藏回答"}
@@ -3438,6 +3703,297 @@ function MessageBubble({
         ) : null}
       </article>
     </div>
+  );
+}
+
+function AssistantMarkdown({
+  content,
+  sourceByIndex,
+}: {
+  content: string;
+  sourceByIndex: Map<number, Source>;
+}) {
+  const components = useMemo<Components>(
+    () => ({
+      p: ({ children }) => <p className="mb-3 last:mb-0">{renderCitationNodes(children, sourceByIndex)}</p>,
+      strong: ({ children }) => (
+        <strong className="font-semibold text-slate-950">{renderCitationNodes(children, sourceByIndex)}</strong>
+      ),
+      em: ({ children }) => <em>{renderCitationNodes(children, sourceByIndex)}</em>,
+      ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
+      ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>,
+      li: ({ children }) => <li className="pl-1">{renderCitationNodes(children, sourceByIndex)}</li>,
+      blockquote: ({ children }) => (
+        <blockquote className="my-3 border-l-2 border-[var(--border-strong)] pl-3 text-[var(--muted)]">
+          {children}
+        </blockquote>
+      ),
+      code: ({ children, className }) => {
+        const isInline = !className;
+        return isInline ? (
+          <code className="rounded bg-[var(--panel-strong)] px-1.5 py-0.5 text-[0.92em] text-slate-900">
+            {children}
+          </code>
+        ) : (
+          <code className={className}>{children}</code>
+        );
+      },
+      pre: ({ children }) => (
+        <pre className="my-3 max-w-full overflow-x-auto rounded-lg border border-[var(--border)] bg-slate-950 px-3 py-2 text-xs leading-6 text-slate-50">
+          {children}
+        </pre>
+      ),
+      a: ({ children, href }) => (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-[var(--accent-strong)] underline decoration-[var(--accent-soft)] underline-offset-4 hover:text-slate-950"
+        >
+          {renderCitationNodes(children, sourceByIndex)}
+        </a>
+      ),
+      table: ({ children }) => (
+        <div className="my-3 max-w-full overflow-x-auto">
+          <table className="w-full min-w-[28rem] border-collapse text-left text-sm">{children}</table>
+        </div>
+      ),
+      th: ({ children }) => (
+        <th className="border border-[var(--border)] bg-[var(--panel-strong)] px-3 py-2 font-semibold text-slate-950">
+          {renderCitationNodes(children, sourceByIndex)}
+        </th>
+      ),
+      td: ({ children }) => (
+        <td className="border border-[var(--border)] px-3 py-2 align-top">
+          {renderCitationNodes(children, sourceByIndex)}
+        </td>
+      ),
+      h1: ({ children }) => (
+        <h1 className="mb-2 mt-4 text-lg font-semibold leading-7 text-slate-950 first:mt-0">
+          {renderCitationNodes(children, sourceByIndex)}
+        </h1>
+      ),
+      h2: ({ children }) => (
+        <h2 className="mb-2 mt-4 text-base font-semibold leading-7 text-slate-950 first:mt-0">
+          {renderCitationNodes(children, sourceByIndex)}
+        </h2>
+      ),
+      h3: ({ children }) => (
+        <h3 className="mb-2 mt-3 text-[15px] font-semibold leading-7 text-slate-950 first:mt-0">
+          {renderCitationNodes(children, sourceByIndex)}
+        </h3>
+      ),
+    }),
+    [sourceByIndex],
+  );
+
+  return (
+    <div className="assistant-markdown min-w-0 break-words">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        skipHtml
+        components={components}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function renderCitationNodes(children: ReactNode, sourceByIndex: Map<number, Source>): ReactNode {
+  return Children.map(children, (child) => {
+    if (typeof child === "string") {
+      return renderCitationText(child, sourceByIndex);
+    }
+
+    return child;
+  });
+}
+
+type CitationSegment =
+  | { type: "text"; text: string }
+  | { type: "citation"; index: number };
+
+function renderCitationText(text: string, sourceByIndex: Map<number, Source>) {
+  return splitCitationSegments(text).map((segment, index) =>
+    segment.type === "citation" ? (
+      <CitationPopover
+        key={`${segment.index}-${index}`}
+        index={segment.index}
+        source={sourceByIndex.get(segment.index)}
+      />
+    ) : (
+      <Fragment key={`text-${index}`}>{segment.text}</Fragment>
+    ),
+  );
+}
+
+function splitCitationSegments(text: string): CitationSegment[] {
+  if (!text) {
+    return [{ type: "text", text: "..." }];
+  }
+
+  const segments: CitationSegment[] = [];
+  const citationPattern = /\[(\d+)\]/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = citationPattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      segments.push({ type: "text", text: text.slice(cursor, match.index) });
+    }
+    segments.push({ type: "citation", index: Number(match[1]) });
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    segments.push({ type: "text", text: text.slice(cursor) });
+  }
+
+  return segments;
+}
+
+function CitationPopover({
+  index,
+  source,
+  showTitle = false,
+}: {
+  index: number;
+  source?: Source;
+  showTitle?: boolean;
+}) {
+  const [pinned, setPinned] = useState(false);
+  const [mobilePopoverStyle, setMobilePopoverStyle] = useState<{
+    left: number;
+    top: number;
+    transform: string;
+  } | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!pinned) {
+      return;
+    }
+    function clearPinned(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(`[data-citation-index="${index}"]`)) {
+        return;
+      }
+      setPinned(false);
+      setMobilePopoverStyle(null);
+    }
+    function clearOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPinned(false);
+        setMobilePopoverStyle(null);
+      }
+    }
+    window.addEventListener("pointerdown", clearPinned);
+    window.addEventListener("keydown", clearOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", clearPinned);
+      window.removeEventListener("keydown", clearOnEscape);
+    };
+  }, [index, pinned]);
+
+  function clearLongPressTimer() {
+    if (longPressTimer.current) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  function pinMobilePopover() {
+    const button = buttonRef.current;
+    if (!button) {
+      setPinned(true);
+      return;
+    }
+
+    const triggerRect = button.getBoundingClientRect();
+    const visualViewport = window.visualViewport;
+    const viewportLeft = visualViewport?.offsetLeft ?? 0;
+    const viewportTop = visualViewport?.offsetTop ?? 0;
+    const viewportWidth = visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = visualViewport?.height ?? window.innerHeight;
+    const margin = 16;
+    const popoverWidth = Math.min(320, Math.max(240, viewportWidth - margin * 2));
+    const halfWidth = popoverWidth / 2;
+    const preferredLeft = triggerRect.left + triggerRect.width / 2;
+    const minLeft = viewportLeft + margin + halfWidth;
+    const maxLeft = viewportLeft + viewportWidth - margin - halfWidth;
+    const left = Math.min(Math.max(preferredLeft, minLeft), maxLeft);
+    const topSpace = triggerRect.top - viewportTop;
+    const belowTop = Math.min(
+      triggerRect.bottom + 10,
+      viewportTop + viewportHeight - margin - 148,
+    );
+    const top = topSpace > 164 ? triggerRect.top - 10 : Math.max(viewportTop + margin, belowTop);
+
+    setMobilePopoverStyle({
+      left,
+      top,
+      transform: topSpace > 164 ? "translate(-50%, -100%)" : "translate(-50%, 0)",
+    });
+    setPinned(true);
+  }
+
+  return (
+    <span className="citation-popover group/citation relative inline-flex align-baseline" data-citation-index={index}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onPointerDown={(event) => {
+          if (event.pointerType === "mouse") {
+            return;
+          }
+          clearLongPressTimer();
+          longPressTimer.current = window.setTimeout(() => {
+            pinMobilePopover();
+          }, 360);
+        }}
+        onPointerUp={clearLongPressTimer}
+        onPointerCancel={clearLongPressTimer}
+        onPointerLeave={clearLongPressTimer}
+        className="mx-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-white/78 bg-white/62 px-1.5 text-xs font-semibold leading-none text-[var(--accent-strong)] shadow-[0_8px_22px_rgba(15,23,42,0.10)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/88 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        aria-label={source ? `查看引用 ${index}: ${source.title}` : `查看引用 ${index}`}
+        aria-expanded={pinned}
+      >
+        [{index}]
+        {showTitle && source ? <span className="ml-1 max-w-[9rem] truncate">{source.title}</span> : null}
+      </button>
+      <span
+        data-citation-popover
+        style={
+          pinned && mobilePopoverStyle
+            ? {
+                left: `${mobilePopoverStyle.left}px`,
+                top: `${mobilePopoverStyle.top}px`,
+                transform: mobilePopoverStyle.transform,
+              }
+            : undefined
+        }
+        className={cn(
+          "pointer-events-none z-50 rounded-2xl border border-white/75 bg-white/72 p-3 text-left text-xs leading-5 text-slate-700 opacity-0 shadow-[0_24px_70px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.88)] backdrop-blur-2xl transition duration-200",
+          pinned
+            ? "fixed w-[min(320px,calc(100vw-32px))] opacity-100"
+            : cn(
+                "absolute bottom-[calc(100%+10px)] w-[min(78vw,320px)] translate-y-1 group-hover/citation:translate-y-0 group-hover/citation:opacity-100 group-focus-within/citation:translate-y-0 group-focus-within/citation:opacity-100",
+                showTitle
+                  ? "left-0"
+                  : "left-1/2 -translate-x-1/2 group-hover/citation:-translate-x-1/2 group-focus-within/citation:-translate-x-1/2",
+              ),
+        )}
+      >
+        <span className="mb-1 block truncate text-[11px] font-semibold text-slate-950">
+          {source ? source.title : "引用来源"}
+        </span>
+        <span className="line-clamp-6 block">
+          {source ? source.text : "暂无可展示的引用片段。"}
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -3490,24 +4046,27 @@ function Composer({
   onSubmit: (event: FormEvent) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="shrink-0 px-4 pb-3">
-      <div className="mx-auto max-w-3xl rounded-[26px] border border-white/80 bg-white/88 p-3 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-xl transition focus-within:border-white focus-within:bg-white focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)]">
-        <textarea
-          value={input}
-          onChange={(event) => onInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder="输入校园资料库相关问题..."
-          className="chat-composer-input min-h-16 w-full resize-none border-0 bg-transparent px-3 py-2 text-base leading-7 text-[var(--foreground)] outline-none placeholder:text-slate-400"
-          rows={2}
-          maxLength={2000}
-        />
-        <div className="flex items-center justify-end px-1 pt-1">
-          <Button type="submit" variant="primary" size="icon" className="h-11 w-11 rounded-full" disabled={status === "streaming"} title="发送" aria-label="发送">
+    <form onSubmit={onSubmit} className="mobile-composer pointer-events-none relative z-20 shrink-0 px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
+      <div className="mobile-composer-card pointer-events-auto mx-auto max-w-3xl rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
+        <div className="flex min-h-[52px] items-end gap-2 lg:block lg:min-h-0">
+          <span className="mb-1.5 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.16)] ring-1 ring-white/90 lg:hidden">
+            <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 object-cover" aria-hidden="true" />
+          </span>
+          <textarea
+            value={input}
+            onChange={(event) => onInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="问问 Maverella"
+            className="chat-composer-input min-h-[48px] flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
+            rows={1}
+            maxLength={2000}
+          />
+          <Button type="submit" variant="primary" size="icon" className="mb-1 h-10 w-10 shrink-0 rounded-full bg-[#006c63] text-white shadow-[0_10px_24px_rgba(0,108,99,0.22)] hover:bg-[#005a53] lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={status === "streaming"} title="发送" aria-label="发送">
             {status === "streaming" ? (
               <Loader2 className="animate-spin" size={16} aria-hidden="true" />
             ) : (
@@ -3516,9 +4075,9 @@ function Composer({
           </Button>
         </div>
       </div>
-      <p className="mx-auto mt-1 max-w-3xl px-2 text-center text-[10px] leading-4 text-slate-400">
+      <p className="mx-auto mt-2 hidden max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm lg:block">
         遇到无法解决的问题，请联系管理员：
-        <a className="font-medium text-slate-500 hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
+        <a className="font-medium text-[var(--accent-strong)] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
           {ADMIN_CONTACT_EMAIL}
         </a>
       </p>

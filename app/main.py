@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Optional, Union
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,7 @@ from xyfrag.knowledge_base import (
     BoundaryDatasetItemRecord,
     ClassifierModelRecord,
     DEFAULT_KNOWLEDGE_BASE_ID,
+    DISABLED_CLASSIFIER_MODEL_ID,
     IndexJobRecord,
     KnowledgeBaseRecord,
     KnowledgeBaseStore,
@@ -147,7 +148,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = None
-    boundary_classifier_enabled: Optional[bool] = None
+    active_classifier_model_id: Optional[str] = None
 
 
 class KnowledgeBaseResponse(BaseModel):
@@ -155,10 +156,10 @@ class KnowledgeBaseResponse(BaseModel):
     name: str
     description: str
     status: str
-    boundary_classifier_enabled: bool
     document_count: int
     index_status: str
     last_indexed_at: Optional[float] = None
+    active_classifier_model_id: Optional[str] = None
     updated_at: float
     created_at: float
 
@@ -302,16 +303,22 @@ def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> 
 
     if knowledge_base.status != "active":
         raise HTTPException(status_code=409, detail="知识库已停用。")
-    if knowledge_base.index_status != "ready":
-        raise HTTPException(status_code=409, detail="知识库尚未完成索引构建。")
 
     services: dict[str, RAGService] = app.state.rag_services
     if knowledge_base.id not in services:
         store: KnowledgeBaseStore = app.state.knowledge_store
+        if knowledge_base.index_status not in {"ready", "pending", "building"}:
+            raise HTTPException(
+                status_code=409,
+                detail=_index_not_ready_detail(knowledge_base.index_status),
+            )
         try:
             knowledge_index = store.load_index(knowledge_base.id)
         except Exception as exc:
-            raise HTTPException(status_code=409, detail="知识库尚未完成索引构建。") from exc
+            raise HTTPException(
+                status_code=409,
+                detail=_index_not_ready_detail(knowledge_base.index_status),
+            ) from exc
         services[knowledge_base.id] = RAGService(
             settings=store.settings_for(knowledge_base.id),
             knowledge_index=knowledge_index,
@@ -323,6 +330,50 @@ def _service_for_knowledge_base(app: FastAPI, knowledge_base_id: str | None) -> 
 def _invalidate_service(app: FastAPI, knowledge_base_id: str) -> None:
     services: dict[str, RAGService] = app.state.rag_services
     services.pop(knowledge_base_id, None)
+
+
+def _schedule_index_rebuild(
+    app: FastAPI,
+    knowledge_base_id: str,
+    background_tasks: BackgroundTasks,
+) -> None:
+    _invalidate_service(app, knowledge_base_id)
+    background_tasks.add_task(_run_auto_index_job, app, knowledge_base_id)
+
+
+def _run_auto_index_job(app: FastAPI, knowledge_base_id: str) -> None:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        knowledge_base = store.require_knowledge_base(knowledge_base_id)
+        if knowledge_base.document_count <= 0:
+            return
+        job = store.create_index_job(knowledge_base_id)
+        logger.info(
+            "stage=auto_index knowledge_base_id=%s job_id=%s status=%s message=%s",
+            knowledge_base_id,
+            job.id,
+            job.status,
+            job.message,
+        )
+    except Exception as exc:
+        logger.error(
+            "stage=auto_index_error knowledge_base_id=%s error=%s",
+            knowledge_base_id,
+            exc,
+            exc_info=True,
+        )
+    finally:
+        _invalidate_service(app, knowledge_base_id)
+
+
+def _index_not_ready_detail(index_status: str) -> str:
+    if index_status == "pending":
+        return "知识库资料已更新，正在自动构建索引，请稍后再试。"
+    if index_status == "building":
+        return "知识库正在自动构建索引，请稍后再试。"
+    if index_status == "failed":
+        return "知识库索引构建失败，请管理员重新构建。"
+    return "知识库尚未完成索引构建。"
 
 
 @asynccontextmanager
@@ -684,10 +735,22 @@ async def update_knowledge_base(
             name=request.name,
             description=request.description,
             status=request.status,  # type: ignore[arg-type]
-            boundary_classifier_enabled=request.boundary_classifier_enabled,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    if request.active_classifier_model_id is not None:
+        try:
+            knowledge_base = store.set_active_classifier_model(
+                knowledge_base_id,
+                request.active_classifier_model_id,
+            )
+        except KeyError as exc:
+            detail = (
+                "边界模型不存在。"
+                if request.active_classifier_model_id != DISABLED_CLASSIFIER_MODEL_ID
+                else "知识库不存在。"
+            )
+            raise HTTPException(status_code=404, detail=detail) from exc
     _invalidate_service(app, knowledge_base_id)
     return _kb_response(knowledge_base)
 
@@ -714,6 +777,7 @@ async def list_documents(
 async def upload_documents(
     knowledge_base_id: str,
     _internal: InternalAuth,
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
 ) -> list[KnowledgeDocumentResponse]:
     store: KnowledgeBaseStore = app.state.knowledge_store
@@ -734,7 +798,7 @@ async def upload_documents(
         raise HTTPException(status_code=404, detail="知识库不存在。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _invalidate_service(app, knowledge_base_id)
+    _schedule_index_rebuild(app, knowledge_base_id, background_tasks)
     return documents
 
 
@@ -746,13 +810,14 @@ async def delete_document(
     knowledge_base_id: str,
     document_id: str,
     _internal: InternalAuth,
+    background_tasks: BackgroundTasks,
 ) -> KnowledgeBaseResponse:
     store: KnowledgeBaseStore = app.state.knowledge_store
     try:
         knowledge_base = store.delete_document(knowledge_base_id, document_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文档不存在。") from exc
-    _invalidate_service(app, knowledge_base_id)
+    _schedule_index_rebuild(app, knowledge_base_id, background_tasks)
     return _kb_response(knowledge_base)
 
 

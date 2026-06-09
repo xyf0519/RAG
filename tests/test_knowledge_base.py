@@ -11,7 +11,11 @@ from xyfrag.config import (
     RetrievalConfig,
     Settings,
 )
-from xyfrag.knowledge_base import DEFAULT_KNOWLEDGE_BASE_ID, KnowledgeBaseStore
+from xyfrag.knowledge_base import (
+    DEFAULT_KNOWLEDGE_BASE_ID,
+    DISABLED_CLASSIFIER_MODEL_ID,
+    KnowledgeBaseStore,
+)
 
 
 def test_store_creates_default_and_migrates_legacy_assets(tmp_path: Path) -> None:
@@ -40,9 +44,6 @@ def test_store_crud_upload_and_index_job(tmp_path: Path) -> None:
     knowledge_base = store.create_knowledge_base("一卡通服务", "校园卡业务资料")
     updated = store.update_knowledge_base(knowledge_base.id, status="disabled")
     assert updated.status == "disabled"
-    disabled_boundary = store.update_knowledge_base(knowledge_base.id, boundary_classifier_enabled=False)
-    assert disabled_boundary.boundary_classifier_enabled is False
-    assert store.settings_for(knowledge_base.id).boundary_classifier.enabled is False
 
     document = store.add_document(
         knowledge_base.id,
@@ -153,7 +154,13 @@ def test_store_trains_boundary_classifier_model(tmp_path: Path) -> None:
     assert len(models) == 1
     assert models[0].name == "边界范围模型"
     assert models[0].status == "ready"
-    assert store.get_knowledge_base(knowledge_base.id).boundary_classifier_enabled is True  # type: ignore[union-attr]
+    assert store.get_knowledge_base(knowledge_base.id).active_classifier_model_id == models[0].id  # type: ignore[union-attr]
+    assert store.settings_for(knowledge_base.id).paths.classifier_dir == Path(models[0].artifact_path).parent
+
+    updated = store.set_active_classifier_model(knowledge_base.id, DISABLED_CLASSIFIER_MODEL_ID)
+
+    assert updated.active_classifier_model_id == DISABLED_CLASSIFIER_MODEL_ID
+    assert store.settings_for(knowledge_base.id).boundary_classifier.enabled is False
 
 
 def test_store_rejects_unsupported_or_empty_documents(tmp_path: Path) -> None:

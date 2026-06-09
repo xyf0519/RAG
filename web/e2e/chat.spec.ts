@@ -1,6 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => {
+  await page.route("**/api/auth/session", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        user: {
+          id: "admin",
+          name: "知识库管理员",
+          email: "admin@xyfrag.cn",
+          role: "admin",
+        },
+      }),
+    });
+  });
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -63,33 +77,44 @@ test("chat workspace can stream a mocked answer", async ({ page, isMobile }) => 
     });
   });
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "xyfrag.auth.v1",
-      JSON.stringify({
-        user: {
-          id: "admin",
-          name: "知识库管理员",
-          email: "admin@xyfrag.cn",
-          role: "admin",
-        },
-        issuedAt: Date.now(),
-      }),
-    );
-  });
-
   await page.goto("/");
-  await page.getByPlaceholder("输入校园资料库相关问题...").fill("挂科后什么时候申请补考？");
+  if (isMobile) {
+    await expect(page.getByRole("button", { name: "更多输入方式" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "语音输入" })).toHaveCount(0);
+    await page.getByRole("button", { name: "打开菜单" }).click();
+    await expect(page.locator(".product-sidebar").getByText("知识问答中枢")).toBeVisible();
+    await expect(page.locator(".product-sidebar").getByRole("button", { name: /发起新对话/ })).toBeVisible();
+    await expect(page.locator(".product-sidebar").getByRole("heading", { name: "最近" })).toBeVisible();
+    await expect(page.getByLabel("搜索对话内容")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "库", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "关闭导航" }).click();
+  }
+  await page.getByPlaceholder("问问 Maverella").fill("挂科后什么时候申请补考？");
   await page.getByRole("button", { name: "发送" }).click();
 
-  await expect(page.getByText("请在开学前两周提交补考申请。[1]")).toBeVisible();
+  await expect(page.getByText("请在开学前两周提交补考申请。")).toBeVisible();
+  await expect(page.getByRole("button", { name: /查看引用 1: 补考/ }).first()).toBeVisible();
+  if (isMobile) {
+    const citation = page.getByRole("button", { name: /查看引用 1: 补考/ }).first();
+    await citation.dispatchEvent("pointerdown", { pointerType: "touch" });
+    await page.waitForTimeout(420);
+    await citation.dispatchEvent("pointerup", { pointerType: "touch" });
+    await expect(page.getByText("补考申请应在开学前两周提交。").first()).toBeVisible();
+    const popoverBox = await page.locator("[data-citation-popover]").filter({ hasText: "补考申请应在开学前两周提交。" }).first().boundingBox();
+    const viewport = page.viewportSize();
+    expect(popoverBox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
+    expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(viewport!.width);
+  }
   if (!isMobile) {
     await page.getByRole("button", { name: "回答有帮助" }).click();
     await expect(page.getByText("反馈已记录")).toBeVisible();
   }
   await expect(page.getByRole("button", { name: /挂科后什么时候申请补考/ })).toBeVisible();
   if (isMobile) {
-    await page.getByRole("button", { name: "引用", exact: true }).click();
+    await expect(page.getByRole("button", { name: "引用", exact: true })).toHaveCount(0);
+  } else {
+    await expect(page.getByRole("heading", { name: "补考" })).toBeVisible();
   }
-  await expect(page.getByRole("heading", { name: "补考" })).toBeVisible();
 });

@@ -1,5 +1,6 @@
 export type ErrorCode =
   | "BACKEND_UNAVAILABLE"
+  | "INDEX_NOT_READY"
   | "LLM_TIMEOUT"
   | "NO_REFERENCE"
   | "OUT_OF_SCOPE";
@@ -112,10 +113,10 @@ export type KnowledgeBase = {
   name: string;
   description: string;
   status: "active" | "disabled";
-  boundary_classifier_enabled: boolean;
   document_count: number;
   index_status: "not_indexed" | "pending" | "building" | "ready" | "failed";
   last_indexed_at?: number | null;
+  active_classifier_model_id?: string | null;
   updated_at: number;
   created_at: number;
 };

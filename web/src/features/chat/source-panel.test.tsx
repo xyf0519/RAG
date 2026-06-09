@@ -77,7 +77,6 @@ describe("ChatWorkspace", () => {
               name: "默认校园资料库",
               description: "默认知识库",
               status: "active",
-              boundary_classifier_enabled: true,
               document_count: 3,
               index_status: "ready",
               last_indexed_at: null,
@@ -186,6 +185,43 @@ describe("ChatWorkspace", () => {
     );
   }
 
+  function seedMarkdownChatHistory() {
+    const sessionId = "session-markdown";
+    window.localStorage.setItem("xyfrag.session.v1", sessionId);
+    window.localStorage.setItem(
+      `xyfrag.chat.v1.${sessionId}`,
+      JSON.stringify([
+        {
+          id: "user-markdown",
+          role: "user",
+          content: "校园卡挂失流程",
+          createdAt: Date.now() - 60_000,
+          knowledgeBaseId: "kb-default",
+          knowledgeBaseName: "默认校园资料库",
+        },
+        {
+          id: "assistant-markdown",
+          role: "assistant",
+          content: "**重点**\n\n* 第一条：及时挂失。[1]\n* 第二条：补办校园卡。",
+          createdAt: Date.now() - 55_000,
+          knowledgeBaseId: "kb-default",
+          knowledgeBaseName: "默认校园资料库",
+          sources: [
+            {
+              index: 1,
+              doc_id: "doc-guide",
+              chunk_id: "doc-guide-0001",
+              title: "校园卡指南",
+              score: 0.9,
+              text: "校园卡遗失后应及时挂失。",
+              knowledge_base_id: "kb-default",
+            },
+          ],
+        },
+      ]),
+    );
+  }
+
   it("renders the usable first screen", async () => {
     seedSession("admin");
 
@@ -196,8 +232,8 @@ describe("ChatWorkspace", () => {
     );
 
     expect((await screen.findAllByRole("heading", { name: "Maverella" })).length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText("输入校园资料库相关问题...")).toBeInTheDocument();
-    expect(screen.getByText("有什么需要查询？")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("问问 Maverella")).toBeInTheDocument();
+    expect(screen.getByText(/想聊点什么？/)).toBeInTheDocument();
     expect(screen.queryByText("挂科后什么时候申请补考？")).not.toBeInTheDocument();
   });
 
@@ -283,7 +319,7 @@ describe("ChatWorkspace", () => {
       </AuthProvider>,
     );
 
-    await screen.findByPlaceholderText("输入校园资料库相关问题...");
+    await screen.findByPlaceholderText("问问 Maverella");
     expect(screen.queryByRole("button", { name: /添加知识库/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /边界训练/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /用户运维/ })).not.toBeInTheDocument();
@@ -302,6 +338,26 @@ describe("ChatWorkspace", () => {
     fireEvent.click(await screen.findByRole("button", { name: /校园卡挂失流程/ }));
 
     expect(screen.getByText("校园卡遗失后应及时挂失。")).toBeInTheDocument();
+  });
+
+  it("renders assistant markdown without leaking raw markers", async () => {
+    seedSession("admin");
+    seedMarkdownChatHistory();
+
+    render(
+      <AuthProvider>
+        <ChatWorkspace />
+      </AuthProvider>,
+    );
+
+    const strongText = await screen.findByText("重点");
+
+    expect(strongText.tagName).toBe("STRONG");
+    expect(screen.getByText(/第一条：及时挂失/)).toBeInTheDocument();
+    expect(screen.getByText(/第二条：补办校园卡/)).toBeInTheDocument();
+    expect(screen.queryByText("**重点**")).not.toBeInTheDocument();
+    expect(screen.queryByText("* 第一条：及时挂失。[1]")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /查看引用 1: 校园卡指南/ }).length).toBeGreaterThan(0);
   });
 
   it("records answer feedback in the conversation", async () => {

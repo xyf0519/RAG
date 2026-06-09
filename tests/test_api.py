@@ -59,6 +59,10 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     global TEST_OPS_DB
     TEST_OPS_DB = settings.paths.ops_db
     monkeypatch.setattr(api, "get_settings", lambda: settings)
+    monkeypatch.delenv("XYFRAG_ENV", raising=False)
+    monkeypatch.delenv("AUTH_DEV_CODE", raising=False)
+    monkeypatch.delenv("ALLOWED_EMAIL_DOMAINS", raising=False)
+    monkeypatch.delenv("INTERNAL_API_KEY", raising=False)
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAIN", "zju.edu.cn")
     monkeypatch.setenv("ADMIN_EMAILS", "admin@zju.edu.cn")
 
@@ -120,15 +124,15 @@ def test_knowledge_base_management_endpoints() -> None:
         list_response = client.get("/api/v1/knowledge-bases")
         assert list_response.status_code == 200
         assert any(item["id"] == knowledge_base["id"] for item in list_response.json())
-        assert knowledge_base["boundary_classifier_enabled"] is True
+        assert knowledge_base["active_classifier_model_id"] is None
 
         patch_response = client.patch(
             f"/api/v1/knowledge-bases/{knowledge_base['id']}",
-            json={"status": "disabled", "boundary_classifier_enabled": False},
+            json={"status": "disabled"},
         )
         assert patch_response.status_code == 200
         assert patch_response.json()["status"] == "disabled"
-        assert patch_response.json()["boundary_classifier_enabled"] is False
+        assert patch_response.json()["active_classifier_model_id"] is None
 
         file_response = client.post(
             f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
@@ -356,6 +360,21 @@ def test_boundary_item_endpoints() -> None:
         model_response = client.get("/api/v1/knowledge-bases/kb-default/classifier-models")
         assert model_response.status_code == 200
         assert model_response.json()[0]["name"] == "边界范围模型"
+        model_id = model_response.json()[0]["id"]
+
+        disable_response = client.patch(
+            "/api/v1/knowledge-bases/kb-default",
+            json={"active_classifier_model_id": "disabled"},
+        )
+        assert disable_response.status_code == 200
+        assert disable_response.json()["active_classifier_model_id"] == "disabled"
+
+        activate_response = client.patch(
+            "/api/v1/knowledge-bases/kb-default",
+            json={"active_classifier_model_id": model_id},
+        )
+        assert activate_response.status_code == 200
+        assert activate_response.json()["active_classifier_model_id"] == model_id
 
         generate_response = client.post(
             "/api/v1/knowledge-bases/kb-default/boundary-items/generate",

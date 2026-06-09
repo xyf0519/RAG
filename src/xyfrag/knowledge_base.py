@@ -22,6 +22,7 @@ JobStatus = Literal["running", "succeeded", "failed"]
 ModelScope = Literal["global", "knowledge_base", "session"]
 
 DEFAULT_KNOWLEDGE_BASE_ID = "kb-default"
+DISABLED_CLASSIFIER_MODEL_ID = "disabled"
 
 
 @dataclass(frozen=True)
@@ -32,10 +33,10 @@ class KnowledgeBaseRecord:
     name: str
     description: str
     status: KnowledgeBaseStatus
-    boundary_classifier_enabled: bool
     document_count: int
     index_status: IndexStatus
     last_indexed_at: float | None
+    active_classifier_model_id: str | None
     updated_at: float
     created_at: float
 
@@ -124,7 +125,6 @@ class KnowledgeBaseStore:
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
-                    boundary_classifier_enabled INTEGER NOT NULL DEFAULT 1,
                     document_count INTEGER NOT NULL DEFAULT 0,
                     index_status TEXT NOT NULL,
                     last_indexed_at REAL,
@@ -200,14 +200,26 @@ class KnowledgeBaseStore:
                 );
                 """
             )
-            columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(knowledge_bases)").fetchall()
-            }
-            if "boundary_classifier_enabled" not in columns:
-                connection.execute(
-                    "ALTER TABLE knowledge_bases ADD COLUMN boundary_classifier_enabled INTEGER NOT NULL DEFAULT 1"
-                )
+            self._ensure_column(
+                connection,
+                "knowledge_bases",
+                "active_classifier_model_id",
+                "ALTER TABLE knowledge_bases ADD COLUMN active_classifier_model_id TEXT",
+            )
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table: str,
+        column: str,
+        statement: str,
+    ) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            connection.execute(statement)
 
     def ensure_default_knowledge_base(self) -> KnowledgeBaseRecord:
         existing = self.get_knowledge_base(DEFAULT_KNOWLEDGE_BASE_ID)
@@ -248,17 +260,16 @@ class KnowledgeBaseStore:
             connection.execute(
                 """
                 INSERT INTO knowledge_bases (
-                    id, name, description, status, boundary_classifier_enabled, document_count,
+                    id, name, description, status, document_count,
                     index_status, last_indexed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     DEFAULT_KNOWLEDGE_BASE_ID,
                     "默认校园资料库",
                     "由现有 data/raw 资料迁移生成，可直接用于问答。",
                     "active",
-                    1,
                     document_count,
                     index_status,
                     now if index_status == "ready" else None,
@@ -299,10 +310,10 @@ class KnowledgeBaseStore:
             connection.execute(
                 """
                 INSERT INTO knowledge_bases (
-                    id, name, description, status, boundary_classifier_enabled, document_count,
+                    id, name, description, status, document_count,
                     index_status, last_indexed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 1, 0, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, 0, ?, NULL, ?, ?)
                 """,
                 (kb_id, name.strip(), description.strip(), "active", "not_indexed", now, now),
             )
@@ -314,32 +325,47 @@ class KnowledgeBaseStore:
         name: str | None = None,
         description: str | None = None,
         status: KnowledgeBaseStatus | None = None,
-        boundary_classifier_enabled: bool | None = None,
     ) -> KnowledgeBaseRecord:
         existing = self.require_knowledge_base(knowledge_base_id)
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
                 UPDATE knowledge_bases
-                SET name = ?,
-                    description = ?,
-                    status = ?,
-                    boundary_classifier_enabled = ?,
-                    updated_at = ?
+                SET name = ?, description = ?, status = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     name.strip() if name is not None else existing.name,
                     description.strip() if description is not None else existing.description,
                     status or existing.status,
-                    int(
-                        existing.boundary_classifier_enabled
-                        if boundary_classifier_enabled is None
-                        else boundary_classifier_enabled
-                    ),
                     time.time(),
                     knowledge_base_id,
                 ),
+            )
+        return self.require_knowledge_base(knowledge_base_id)
+
+    def set_active_classifier_model(
+        self,
+        knowledge_base_id: str,
+        classifier_model_id: str | None,
+    ) -> KnowledgeBaseRecord:
+        self.require_knowledge_base(knowledge_base_id)
+        normalized_id = classifier_model_id.strip() if classifier_model_id else None
+        if normalized_id == "":
+            normalized_id = None
+        if normalized_id and normalized_id != DISABLED_CLASSIFIER_MODEL_ID:
+            model = self.get_classifier_model(knowledge_base_id, normalized_id)
+            if model is None:
+                raise KeyError(f"Classifier model not found: {normalized_id}")
+
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE knowledge_bases
+                SET active_classifier_model_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_id, time.time(), knowledge_base_id),
             )
         return self.require_knowledge_base(knowledge_base_id)
 
@@ -621,12 +647,15 @@ class KnowledgeBaseStore:
             pipeline.fit(texts, y)
             accuracy = float(pipeline.score(texts, y))
 
-            classifier_dir = self.classifier_dir(knowledge_base_id)
-            classifier_dir.mkdir(parents=True, exist_ok=True)
-            artifact_path = classifier_dir / "classifier.joblib"
+            model_id = f"model-{knowledge_base_id}-{uuid4().hex[:12]}"
+            model_dir = self.classifier_model_dir(knowledge_base_id, model_id)
+            model_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path = model_dir / "classifier.joblib"
             joblib.dump(pipeline, artifact_path)
+            shutil.copy2(artifact_path, self.classifier_dir(knowledge_base_id) / "classifier.joblib")
             self._write_boundary_training_snapshot(knowledge_base_id, items)
             self._register_classifier_model(
+                model_id=model_id,
                 knowledge_base_id=knowledge_base_id,
                 job_id=job_id,
                 name=model_name,
@@ -658,6 +687,23 @@ class KnowledgeBaseStore:
                 (knowledge_base_id,),
             ).fetchall()
         return [self._classifier_model_from_row(row) for row in rows]
+
+    def get_classifier_model(
+        self,
+        knowledge_base_id: str,
+        classifier_model_id: str,
+    ) -> ClassifierModelRecord | None:
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM classifier_models
+                WHERE id = ? AND (knowledge_base_id = ? OR scope = 'global')
+                """,
+                (classifier_model_id, knowledge_base_id),
+            ).fetchone()
+        return self._classifier_model_from_row(row) if row else None
 
     def list_boundary_items(
         self,
@@ -796,9 +842,17 @@ class KnowledgeBaseStore:
         settings.paths.raw_docs_dir = self.raw_dir(knowledge_base_id)
         settings.paths.index_dir = self.index_dir(knowledge_base_id)
         settings.paths.classifier_dir = self.classifier_dir(knowledge_base_id)
-        settings.boundary_classifier.enabled = (
-            settings.boundary_classifier.enabled and knowledge_base.boundary_classifier_enabled
-        )
+        active_model_id = knowledge_base.active_classifier_model_id
+        if active_model_id == DISABLED_CLASSIFIER_MODEL_ID:
+            settings.boundary_classifier.enabled = False
+        elif active_model_id:
+            model = self.get_classifier_model(knowledge_base_id, active_model_id)
+            if model:
+                artifact_path = Path(model.artifact_path)
+                if artifact_path.is_file():
+                    settings.paths.classifier_dir = artifact_path.parent
+                elif (artifact_path / "classifier.joblib").exists():
+                    settings.paths.classifier_dir = artifact_path
         return settings
 
     def raw_dir(self, knowledge_base_id: str) -> Path:
@@ -816,6 +870,11 @@ class KnowledgeBaseStore:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def classifier_model_dir(self, knowledge_base_id: str, classifier_model_id: str) -> Path:
+        path = self.classifier_dir(knowledge_base_id) / "models" / classifier_model_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     @staticmethod
     def _kb_from_row(row: sqlite3.Row) -> KnowledgeBaseRecord:
         return KnowledgeBaseRecord(
@@ -823,10 +882,10 @@ class KnowledgeBaseStore:
             name=str(row["name"]),
             description=str(row["description"]),
             status=row["status"],
-            boundary_classifier_enabled=bool(row["boundary_classifier_enabled"]),
             document_count=int(row["document_count"]),
             index_status=row["index_status"],
             last_indexed_at=row["last_indexed_at"],
+            active_classifier_model_id=row["active_classifier_model_id"],
             updated_at=float(row["updated_at"]),
             created_at=float(row["created_at"]),
         )
@@ -908,6 +967,7 @@ class KnowledgeBaseStore:
     def _register_classifier_model(
         self,
         *,
+        model_id: str,
         knowledge_base_id: str,
         job_id: str,
         name: str,
@@ -930,14 +990,6 @@ class KnowledgeBaseStore:
                 """,
                 ("archived", knowledge_base_id, "ready"),
             )
-            connection.execute(
-                """
-                UPDATE knowledge_bases
-                SET boundary_classifier_enabled = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (1, now, knowledge_base_id),
-            )
             row = connection.execute(
                 """
                 SELECT MAX(version) AS version
@@ -956,7 +1008,7 @@ class KnowledgeBaseStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    f"model-{knowledge_base_id}-{uuid4().hex[:12]}",
+                    model_id,
                     knowledge_base_id,
                     normalized_name,
                     scope,
@@ -969,6 +1021,14 @@ class KnowledgeBaseStore:
                     now,
                     now,
                 ),
+            )
+            connection.execute(
+                """
+                UPDATE knowledge_bases
+                SET active_classifier_model_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (model_id, now, knowledge_base_id),
             )
 
     def _write_boundary_training_snapshot(

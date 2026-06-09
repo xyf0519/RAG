@@ -14,9 +14,9 @@ const buttonVariants = cva(
         danger: "border-[var(--danger-border)] bg-[var(--danger-soft)] text-[var(--danger)] hover:bg-[#ffe3e0]",
       },
       size: {
-        sm: "h-8 px-2 text-xs",
-        md: "h-10 px-3 text-sm",
-        icon: "h-9 w-9 px-0",
+        sm: "h-11 px-3 text-sm lg:h-8 lg:px-2 lg:text-xs",
+        md: "h-11 px-3 text-sm lg:h-10",
+        icon: "h-11 w-11 px-0 lg:h-9 lg:w-9",
       },
     },
     defaultVariants: {

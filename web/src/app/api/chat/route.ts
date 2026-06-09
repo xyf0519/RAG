@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import {
+  BackendStreamError,
   buildBackendUnavailableEvent,
   createRequestId,
   proxyChatStream,
@@ -66,6 +67,17 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof BackendStreamError) {
+      return new Response(buildBackendUnavailableEvent(error.message, error.code, error.retryable), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Request-ID": requestId,
+        },
+      });
+    }
+
     const message =
       error instanceof Error && error.name === "TimeoutError"
         ? "RAG 服务响应超时，请稍后重试。"
