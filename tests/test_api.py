@@ -141,11 +141,29 @@ def test_knowledge_base_management_endpoints() -> None:
         assert file_response.status_code == 200
         assert file_response.json()[0]["filename"] == "guide.md"
 
+        delete_response = client.delete(f"/api/v1/knowledge-bases/{knowledge_base['id']}")
+        assert delete_response.status_code == 200
+        assert delete_response.json()["ok"] is True
+
+        list_after_delete = client.get("/api/v1/knowledge-bases")
+        assert list_after_delete.status_code == 200
+        assert all(item["id"] != knowledge_base["id"] for item in list_after_delete.json())
+
+        default_delete = client.delete("/api/v1/knowledge-bases/kb-default")
+        assert default_delete.status_code == 400
+
 
 def test_email_auth_register_login_and_reset() -> None:
     with TestClient(app) as client:
         rejected = client.post("/api/v1/auth/register/start", json={"email": "user@example.com"})
         assert rejected.status_code == 400
+
+        missing_login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "missing@zju.edu.cn", "password": "password123"},
+        )
+        assert missing_login.status_code == 401
+        assert missing_login.json()["detail"] == "请先注册。"
 
         start = client.post("/api/v1/auth/register/start", json={"email": "user@zju.edu.cn"})
         assert start.status_code == 200
@@ -319,6 +337,23 @@ def test_admin_can_list_users_and_assign_roles() -> None:
             json={"role": "user"},
         )
         assert core_downgrade.status_code == 400
+
+        delete_response = client.delete(
+            f"/api/v1/auth/admin/users/{user['id']}",
+            params={"operator_user_id": admin["id"]},
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["message"] == "用户已删除。"
+
+        list_after_delete = client.get("/api/v1/auth/users")
+        assert list_after_delete.status_code == 200
+        assert all(item["id"] != user["id"] for item in list_after_delete.json()["users"])
+
+        self_delete = client.delete(
+            f"/api/v1/auth/admin/users/{admin['id']}",
+            params={"operator_user_id": admin["id"]},
+        )
+        assert self_delete.status_code == 400
 
 
 def test_boundary_item_endpoints() -> None:

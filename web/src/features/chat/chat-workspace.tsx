@@ -94,6 +94,21 @@ const DEFAULT_KNOWLEDGE_BASE: KnowledgeBase = {
   created_at: Date.now() / 1000,
 };
 
+function isUsableKnowledgeBase(knowledgeBase: KnowledgeBase) {
+  return knowledgeBase.status === "active" && knowledgeBase.index_status === "ready";
+}
+
+function pickPreferredKnowledgeBaseId(knowledgeBases: KnowledgeBase[], currentId?: string) {
+  const current = knowledgeBases.find((item) => item.id === currentId && isUsableKnowledgeBase(item));
+  return (
+    current?.id ??
+    knowledgeBases.find(isUsableKnowledgeBase)?.id ??
+    knowledgeBases.find((item) => item.status === "active")?.id ??
+    knowledgeBases[0]?.id ??
+    DEFAULT_KNOWLEDGE_BASE.id
+  );
+}
+
 const KNOWLEDGE_VISUAL_SRC = "/images/knowledge-governance-visual.png";
 const BOUNDARY_VISUAL_SRC = "/images/boundary-training-visual-v2.png";
 const CHAT_BACKGROUND_SRC = "/images/background.png";
@@ -253,9 +268,7 @@ export function ChatWorkspace() {
       const data = (await response.json()) as KnowledgeBase[];
       if (data.length) {
         setKnowledgeBases(data);
-        setSelectedKnowledgeBaseId((current) =>
-          data.some((item) => item.id === current) ? current : data[0].id,
-        );
+        setSelectedKnowledgeBaseId((current) => pickPreferredKnowledgeBaseId(data, current));
       }
     } catch {
       setKnowledgeBases((current) => (current.length ? current : [DEFAULT_KNOWLEDGE_BASE]));
@@ -281,8 +294,17 @@ export function ChatWorkspace() {
     () => [...chat.messages].reverse().find((message) => message.role === "user"),
     [chat.messages],
   );
-  const selectedKnowledgeBase =
-    knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
+  const selectedWorkspaceKnowledgeBase =
+    knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ??
+    knowledgeBases.find(isUsableKnowledgeBase) ??
+    knowledgeBases.find((item) => item.status === "active") ??
+    knowledgeBases[0] ??
+    DEFAULT_KNOWLEDGE_BASE;
+  const selectedChatKnowledgeBase =
+    isUsableKnowledgeBase(selectedWorkspaceKnowledgeBase)
+      ? selectedWorkspaceKnowledgeBase
+      : knowledgeBases.find(isUsableKnowledgeBase) ?? selectedWorkspaceKnowledgeBase;
+  const chatKnowledgeReady = isUsableKnowledgeBase(selectedChatKnowledgeBase);
   const feedbackStats = useMemo(() => {
     const assistantMessages = chat.messages.filter((message) => message.role === "assistant");
     return {
@@ -299,8 +321,12 @@ export function ChatWorkspace() {
     if (!query) {
       return;
     }
+    if (!chatKnowledgeReady) {
+      void refreshKnowledgeBases();
+      return;
+    }
     setInput("");
-    void chat.sendMessage(query, selectedKnowledgeBase);
+    void chat.sendMessage(query, selectedChatKnowledgeBase);
   }
 
   function changeWorkspaceView(view: WorkspaceView) {
@@ -409,7 +435,7 @@ export function ChatWorkspace() {
           {!isMobileLayout && workspaceView === "knowledge" && auth.isAdmin ? (
             <KnowledgeAddWorkspace
               knowledgeBases={knowledgeBases}
-              selectedKnowledgeBaseId={selectedKnowledgeBase.id}
+              selectedKnowledgeBaseId={selectedWorkspaceKnowledgeBase.id}
               notice={knowledgeNotice}
               onNotice={setKnowledgeNotice}
               onRefresh={refreshKnowledgeBases}
@@ -419,7 +445,7 @@ export function ChatWorkspace() {
           {!isMobileLayout && workspaceView === "boundary" && auth.isAdmin ? (
             <BoundaryTrainingWorkspace
               knowledgeBases={knowledgeBases}
-              selectedKnowledgeBaseId={selectedKnowledgeBase.id}
+              selectedKnowledgeBaseId={selectedWorkspaceKnowledgeBase.id}
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
@@ -434,7 +460,8 @@ export function ChatWorkspace() {
               healthOk={healthOk}
               currentSources={currentSources}
               knowledgeBases={knowledgeBases}
-              selectedKnowledgeBase={selectedKnowledgeBase}
+              selectedKnowledgeBase={selectedChatKnowledgeBase}
+              knowledgeReady={chatKnowledgeReady}
               latestMetadata={latestMetadata}
               feedbackStats={feedbackStats}
               copiedAnswerId={copiedAnswerId}
@@ -472,6 +499,7 @@ function ChatWorkspaceView({
   currentSources,
   knowledgeBases,
   selectedKnowledgeBase,
+  knowledgeReady,
   latestMetadata,
   feedbackStats,
   copiedAnswerId,
@@ -494,6 +522,7 @@ function ChatWorkspaceView({
   currentSources: Source[];
   knowledgeBases: KnowledgeBase[];
   selectedKnowledgeBase: KnowledgeBase;
+  knowledgeReady: boolean;
   latestMetadata: {
     rewritten_query?: string;
     boundary?: { is_in_scope: boolean; probability: number; reason: string };
@@ -597,7 +626,7 @@ function ChatWorkspaceView({
           </div>
         ) : null}
 
-        <Composer input={input} status={chat.status} onInput={onInput} onSubmit={onSubmit} />
+        <Composer input={input} status={chat.status} knowledgeReady={knowledgeReady} onInput={onInput} onSubmit={onSubmit} />
       </section>
 
       <aside
@@ -690,6 +719,7 @@ function KnowledgeAddWorkspace({
   const [savingStatus, setSavingStatus] = useState(false);
   const [savingClassifierModel, setSavingClassifierModel] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  const [deletingKnowledgeBaseId, setDeletingKnowledgeBaseId] = useState("");
   const selectedKnowledgeBase =
     knowledgeBases.find((item) => item.id === selectedKnowledgeBaseId) ?? knowledgeBases[0] ?? DEFAULT_KNOWLEDGE_BASE;
   const visibleKnowledgeBases = knowledgeBases;
@@ -772,6 +802,35 @@ function KnowledgeAddWorkspace({
       await onRefresh();
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "知识库创建失败。");
+    }
+  }
+
+  async function deleteKnowledgeBase(knowledgeBase: KnowledgeBase) {
+    if (knowledgeBase.id === DEFAULT_KNOWLEDGE_BASE.id || deletingKnowledgeBaseId) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除数据库「${knowledgeBase.name}」吗？相关文档、索引和边界模型会一并删除。`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingKnowledgeBaseId(knowledgeBase.id);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${encodeURIComponent(knowledgeBase.id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "数据库删除失败。"));
+      }
+
+      const remaining = knowledgeBases.filter((item) => item.id !== knowledgeBase.id);
+      onSelect(pickPreferredKnowledgeBaseId(remaining));
+      onNotice("数据库已删除。");
+      await onRefresh();
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "数据库删除失败。");
+    } finally {
+      setDeletingKnowledgeBaseId("");
     }
   }
 
@@ -917,30 +976,51 @@ function KnowledgeAddWorkspace({
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-y-auto">
               <div className="space-y-2 pr-1">
-                {visibleKnowledgeBases.map((knowledgeBase) => (
-                  <button
-                    key={knowledgeBase.id}
-                    type="button"
-                    onClick={() => onSelect(knowledgeBase.id)}
-                    className={cn(
-                      "w-full rounded-xl border bg-white px-3 py-3 text-left shadow-sm transition hover:border-[var(--accent)] hover:shadow-md",
-                      knowledgeBase.id === selectedKnowledgeBase.id ? "border-[var(--accent)]" : "border-[var(--border)]",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{knowledgeBase.name}</p>
-                        <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                          {knowledgeBase.document_count} 文档
-                        </p>
-                      </div>
-                      <StatusChip
-                        label={indexStatusLabel(knowledgeBase.index_status)}
-                        tone={knowledgeBase.index_status === "ready" ? "ok" : "muted"}
-                      />
+                {visibleKnowledgeBases.map((knowledgeBase) => {
+                  const deletingKnowledgeBase = deletingKnowledgeBaseId === knowledgeBase.id;
+                  const deleteLocked = knowledgeBase.id === DEFAULT_KNOWLEDGE_BASE.id;
+                  return (
+                    <div
+                      key={knowledgeBase.id}
+                      className={cn(
+                        "flex items-stretch gap-2 rounded-xl border bg-white p-1 shadow-sm transition hover:border-[var(--accent)] hover:shadow-md",
+                        knowledgeBase.id === selectedKnowledgeBase.id ? "border-[var(--accent)]" : "border-[var(--border)]",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelect(knowledgeBase.id)}
+                        className="min-w-0 flex-1 rounded-lg px-2 py-2 text-left transition hover:bg-[var(--panel-muted)]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold">{knowledgeBase.name}</p>
+                            <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                              {knowledgeBase.document_count} 文档
+                            </p>
+                          </div>
+                          <StatusChip
+                            label={indexStatusLabel(knowledgeBase.index_status)}
+                            tone={knowledgeBase.index_status === "ready" ? "ok" : "muted"}
+                          />
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteKnowledgeBase(knowledgeBase)}
+                        disabled={deleteLocked || deletingKnowledgeBase || Boolean(deletingKnowledgeBaseId)}
+                        className={cn(
+                          "flex w-10 shrink-0 items-center justify-center rounded-lg text-[var(--danger)] transition hover:bg-[var(--danger-soft)]",
+                          (deleteLocked || deletingKnowledgeBase || Boolean(deletingKnowledgeBaseId)) && "cursor-not-allowed opacity-45",
+                        )}
+                        title={deleteLocked ? "默认数据库不能删除" : "删除数据库"}
+                        aria-label={`删除数据库 ${knowledgeBase.name}`}
+                      >
+                        {deletingKnowledgeBase ? <Loader2 className="animate-spin" size={15} aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />}
+                      </button>
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
@@ -1729,6 +1809,7 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
   const [notice, setNotice] = useState("用户权限数据正在同步。");
   const [error, setError] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   const loadUsers = useCallback(async (options?: { silent?: boolean }) => {
     setError("");
@@ -1776,7 +1857,7 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
   }, [loadUsers]);
 
   async function updateRole(user: AuthUser, role: UserRole) {
-    if (user.role === role || user.coreAdmin || updatingUserId) {
+    if (user.role === role || user.coreAdmin || updatingUserId || deletingUserId) {
       return;
     }
     setError("");
@@ -1797,6 +1878,34 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
       setError(nextError instanceof Error ? nextError.message : "权限更新失败。");
     } finally {
       setUpdatingUserId(null);
+    }
+  }
+
+  async function deleteUser(user: AuthUser) {
+    if (user.id === currentUser.id || user.coreAdmin || updatingUserId || deletingUserId) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除用户「${user.email}」吗？`);
+    if (!confirmed) {
+      return;
+    }
+
+    setError("");
+    setDeletingUserId(user.id);
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
+        method: "DELETE",
+      });
+      const data = (await readJsonResponse(response)) as { error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "用户删除失败。");
+      }
+      setUsers((current) => current.filter((item) => item.id !== user.id));
+      setNotice(`${user.email} 已删除。`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "用户删除失败。");
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -1860,11 +1969,12 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
                 </div>
               ) : null}
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white">
-                <div className="grid grid-cols-[minmax(220px,1.3fr)_120px_160px_210px] items-center gap-3 border-b border-[var(--border)] bg-[var(--panel-muted)] px-4 py-3 text-xs font-semibold uppercase text-[var(--muted)] max-lg:hidden">
+                <div className="grid grid-cols-[minmax(220px,1.3fr)_120px_160px_210px_48px] items-center gap-3 border-b border-[var(--border)] bg-[var(--panel-muted)] px-4 py-3 text-xs font-semibold uppercase text-[var(--muted)] max-lg:hidden">
                   <span>用户</span>
                   <span>状态</span>
                   <span>最近登录</span>
                   <span>权限</span>
+                  <span className="text-center">操作</span>
                 </div>
                 <div className="min-h-0 flex-1 divide-y divide-[var(--border)] overflow-y-auto">
                   {loading && !users.length ? (
@@ -1879,8 +1989,11 @@ function UserOperationsWorkspace({ currentUser }: { currentUser: AuthUser }) {
                         user={user}
                         currentUserId={currentUser.id}
                         updating={updatingUserId === user.id}
+                        deleting={deletingUserId === user.id}
                         locked={Boolean(user.coreAdmin)}
+                        deleteDisabled={Boolean(deletingUserId) || Boolean(updatingUserId) || user.id === currentUser.id}
                         onChangeRole={(role) => void updateRole(user, role)}
+                        onDelete={() => void deleteUser(user)}
                       />
                     ))
                   ) : (
@@ -1977,17 +2090,23 @@ function UserRow({
   user,
   currentUserId,
   updating,
+  deleting,
   locked,
+  deleteDisabled,
   onChangeRole,
+  onDelete,
 }: {
   user: AuthUser;
   currentUserId: string;
   updating: boolean;
+  deleting: boolean;
   locked: boolean;
+  deleteDisabled: boolean;
   onChangeRole: (role: UserRole) => void;
+  onDelete: () => void;
 }) {
   return (
-    <div className="grid gap-3 px-4 py-4 transition hover:bg-[var(--panel-muted)] lg:grid-cols-[minmax(220px,1.3fr)_120px_160px_210px] lg:items-center">
+    <div className="grid gap-3 px-4 py-4 transition hover:bg-[var(--panel-muted)] lg:grid-cols-[minmax(220px,1.3fr)_120px_160px_210px_48px] lg:items-center">
       <div className="flex min-w-0 items-center gap-3">
         <UserAvatar user={user} size="lg" />
         <div className="min-w-0">
@@ -2011,20 +2130,36 @@ function UserRow({
           <button
             key={role}
             type="button"
-            disabled={locked || updating || user.role === role}
+            disabled={locked || updating || deleting || user.role === role}
             onClick={() => onChangeRole(role)}
             className={cn(
               "flex h-9 items-center justify-center gap-2 rounded-lg text-xs font-semibold transition",
               user.role === role
                 ? "bg-white text-[var(--accent-strong)] shadow-sm"
                 : "text-[var(--muted)] hover:bg-white/78 hover:text-[var(--foreground)]",
-              (locked || updating) && "cursor-not-allowed opacity-70",
+              (locked || updating || deleting) && "cursor-not-allowed opacity-70",
             )}
           >
             {updating && user.role !== role ? <Loader2 className="animate-spin" size={13} aria-hidden="true" /> : null}
             {role === "admin" ? "管理员" : "普通用户"}
           </button>
         ))}
+      </div>
+
+      <div className="flex justify-end lg:justify-center">
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={locked || deleteDisabled || deleting}
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-lg text-[var(--danger)] transition hover:bg-[var(--danger-soft)]",
+            (locked || deleteDisabled || deleting) && "cursor-not-allowed opacity-45",
+          )}
+          title={locked ? "核心管理员不能删除" : user.id === currentUserId ? "不能删除当前登录账号" : "删除用户"}
+          aria-label={`删除用户 ${user.email}`}
+        >
+          {deleting ? <Loader2 className="animate-spin" size={15} aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />}
+        </button>
       </div>
     </div>
   );
@@ -3279,9 +3414,18 @@ function KnowledgeBaseSelect({
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const visibleKnowledgeBases = knowledgeBases.filter((item) => item.status === "active");
-  const options = visibleKnowledgeBases.length ? visibleKnowledgeBases : knowledgeBases;
-  const selectedKnowledgeBase = options.find((item) => item.id === selectedId) ?? options[0] ?? DEFAULT_KNOWLEDGE_BASE;
+  const usableKnowledgeBases = knowledgeBases.filter(isUsableKnowledgeBase);
+  const activeKnowledgeBases = knowledgeBases.filter((item) => item.status === "active");
+  const options = usableKnowledgeBases.length
+    ? usableKnowledgeBases
+    : activeKnowledgeBases.length
+      ? activeKnowledgeBases
+      : knowledgeBases;
+  const selectedKnowledgeBase =
+    options.find((item) => item.id === selectedId) ??
+    knowledgeBases.find((item) => item.id === selectedId) ??
+    options[0] ??
+    DEFAULT_KNOWLEDGE_BASE;
 
   useEffect(() => {
     if (!open) {
@@ -4037,14 +4181,17 @@ function TypingIndicator({ events }: { events: ChatStatusPayload[] }) {
 function Composer({
   input,
   status,
+  knowledgeReady,
   onInput,
   onSubmit,
 }: {
   input: string;
   status: "idle" | "streaming" | "error";
+  knowledgeReady: boolean;
   onInput: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
 }) {
+  const sendDisabled = status === "streaming" || !knowledgeReady;
   return (
     <form onSubmit={onSubmit} className="mobile-composer pointer-events-none relative z-20 shrink-0 px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
       <div className="mobile-composer-card pointer-events-auto mx-auto max-w-3xl rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
@@ -4058,15 +4205,18 @@ function Composer({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
+                if (!knowledgeReady) {
+                  return;
+                }
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder="问问 Maverella"
+            placeholder={knowledgeReady ? "问问 Maverella" : "知识库加载中"}
             className="chat-composer-input min-h-[48px] flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
             rows={1}
             maxLength={2000}
           />
-          <Button type="submit" variant="primary" size="icon" className="mb-1 h-10 w-10 shrink-0 rounded-full bg-[#006c63] text-white shadow-[0_10px_24px_rgba(0,108,99,0.22)] hover:bg-[#005a53] lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={status === "streaming"} title="发送" aria-label="发送">
+          <Button type="submit" variant="primary" size="icon" className="mb-1 h-10 w-10 shrink-0 rounded-full bg-[#006c63] text-white shadow-[0_10px_24px_rgba(0,108,99,0.22)] hover:bg-[#005a53] lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={sendDisabled} title={knowledgeReady ? "发送" : "知识库加载中"} aria-label="发送">
             {status === "streaming" ? (
               <Loader2 className="animate-spin" size={16} aria-hidden="true" />
             ) : (

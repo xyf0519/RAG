@@ -344,6 +344,30 @@ class KnowledgeBaseStore:
             )
         return self.require_knowledge_base(knowledge_base_id)
 
+    def delete_knowledge_base(self, knowledge_base_id: str) -> None:
+        if knowledge_base_id == DEFAULT_KNOWLEDGE_BASE_ID:
+            raise ValueError("默认知识库不能删除。")
+        self.require_knowledge_base(knowledge_base_id)
+        with self._lock, self._connect() as connection:
+            for table in (
+                "documents",
+                "document_deletions",
+                "index_jobs",
+                "boundary_items",
+                "classifier_models",
+                "classifier_jobs",
+            ):
+                connection.execute(
+                    f"DELETE FROM {table} WHERE knowledge_base_id = ?",
+                    (knowledge_base_id,),
+                )
+            connection.execute(
+                "DELETE FROM knowledge_bases WHERE id = ?",
+                (knowledge_base_id,),
+            )
+        shutil.rmtree(self._kb_root / knowledge_base_id, ignore_errors=True)
+        shutil.rmtree(self._model_root / knowledge_base_id, ignore_errors=True)
+
     def set_active_classifier_model(
         self,
         knowledge_base_id: str,

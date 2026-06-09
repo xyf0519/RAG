@@ -29,3 +29,26 @@ export async function PATCH(
     );
   }
 }
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ knowledgeBaseId: string }> },
+) {
+  const auth = await requireAdmin(request);
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const { knowledgeBaseId } = await context.params;
+  try {
+    return NextResponse.json(
+      await proxyBackendJson(`/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`, {
+        method: "DELETE",
+      }),
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "知识库删除失败。" },
+      { status: 502 },
+    );
+  }
+}

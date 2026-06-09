@@ -531,6 +531,23 @@ async def auth_admin_update_user_role(
     return await auth_update_user_role(user_id, request, operator_user_id, _internal)
 
 
+@app.delete("/api/v1/auth/admin/users/{user_id}", response_model=AuthResponse)
+async def auth_admin_delete_user(
+    user_id: str,
+    operator_user_id: str,
+    _internal: InternalAuth,
+) -> AuthResponse:
+    store: AuthStore = app.state.auth_store
+    try:
+        operator = store.require_user(operator_user_id)
+        if operator.role != "admin":
+            raise HTTPException(status_code=403, detail="需要管理员权限。")
+        store.delete_user(user_id, operator)
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AuthResponse(ok=True, message="用户已删除。")
+
+
 @app.post("/api/v1/auth/password-reset/start", response_model=AuthResponse)
 async def auth_password_reset_start(
     request: AuthCodeRequest,
@@ -753,6 +770,22 @@ async def update_knowledge_base(
             raise HTTPException(status_code=404, detail=detail) from exc
     _invalidate_service(app, knowledge_base_id)
     return _kb_response(knowledge_base)
+
+
+@app.delete("/api/v1/knowledge-bases/{knowledge_base_id}")
+async def delete_knowledge_base(
+    knowledge_base_id: str,
+    _internal: InternalAuth,
+) -> dict[str, bool]:
+    store: KnowledgeBaseStore = app.state.knowledge_store
+    try:
+        store.delete_knowledge_base(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_service(app, knowledge_base_id)
+    return {"ok": True}
 
 
 @app.get(

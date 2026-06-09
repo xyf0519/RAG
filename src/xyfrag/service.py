@@ -320,6 +320,7 @@ class RAGService:
             return
 
         yield self._status("generate", "正在生成回答")
+        streamed_answer = False
         if self._should_use_mock_answer():
             answer = build_mock_grounded_answer(query, documents)
             result = ChatResult(
@@ -334,9 +335,18 @@ class RAGService:
             )
         else:
             try:
-                answer_response = await self._llm_client.chat(
+                llm_started = time.perf_counter()
+                answer_parts: list[str] = []
+                async for chunk in self._llm_client.stream_chat(
                     build_answer_messages(query, documents)
-                )
+                ):
+                    answer_parts.append(chunk)
+                    yield StreamEvent(type="delta", payload={"text": chunk})
+
+                answer = "".join(answer_parts).strip()
+                if not answer:
+                    raise LLMClientError("大模型响应为空。")
+                llm_elapsed_seconds = time.perf_counter() - llm_started
             except LLMClientError as exc:
                 result = ChatResult(
                     answer="服务暂时无法生成回答，请稍后重试。",
@@ -360,20 +370,22 @@ class RAGService:
                 return
 
             result = ChatResult(
-                answer=answer_response.content,
+                answer=answer,
                 session_id=session_id,
                 rewritten_query=rewritten_query,
                 boundary=boundary,
                 sources=sources,
-                llm_elapsed_seconds=answer_response.elapsed_seconds,
+                llm_elapsed_seconds=llm_elapsed_seconds,
                 total_elapsed_seconds=time.perf_counter() - started_at,
                 used_llm=True,
             )
+            streamed_answer = True
 
         self._sessions.append(session_id, "user", query)
         self._sessions.append(session_id, "assistant", result.answer)
-        for chunk in self._chunk_answer(result.answer):
-            yield StreamEvent(type="delta", payload={"text": chunk})
+        if not streamed_answer:
+            for chunk in self._chunk_answer(result.answer):
+                yield StreamEvent(type="delta", payload={"text": chunk})
         yield self._status("complete", "回答完成")
         yield self._final_event(result)
 

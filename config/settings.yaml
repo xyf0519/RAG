@@ -23,7 +23,7 @@ retrieval:
   bm25_top_k: 8
   embedding_top_k: 8
   rerank_top_k: 3
-  embedding_backend: sentence_transformer
+  embedding_backend: bge
   embedding_model: models/huggingface/bge-small-zh-v1.5
   reranker_backend: lexical
   reranker_model: ""

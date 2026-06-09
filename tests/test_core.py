@@ -95,6 +95,36 @@ def test_stream_chat_out_of_scope_without_llm() -> None:
     assert events[-1].payload["error_code"] == "OUT_OF_SCOPE"
 
 
+def test_stream_chat_forwards_llm_deltas_without_rechunking(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    service = make_service(
+        [
+            DocumentChunk(
+                "card",
+                "card-1",
+                "校园卡",
+                "校园卡丢失后应立即挂失并补办。",
+                {},
+            )
+        ]
+    )
+
+    class FakeStreamingClient:
+        async def stream_chat(self, messages):  # noqa: ANN001
+            yield "第一段"
+            yield "第二段"
+
+    service._llm_client = FakeStreamingClient()  # type: ignore[assignment]
+
+    events = asyncio.run(collect_stream(service, "session-1", "校园卡丢了怎么办"))
+
+    deltas = [event.payload["text"] for event in events if event.type == "delta"]
+    final = next(event for event in events if event.type == "final")
+    assert deltas == ["第一段", "第二段"]
+    assert final.payload["answer"] == "第一段第二段"
+    assert final.payload["used_llm"] is True
+
+
 def test_chat_no_reference_returns_standard_message() -> None:
     service = make_service([])
     result = asyncio.run(service.chat("session-1", "校园卡怎么办"))

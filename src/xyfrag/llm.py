@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,6 +111,91 @@ class OpenAICompatibleClient:
 
         logger.info("LLM call completed elapsed=%.3fs", elapsed_seconds)
         return LLMResponse(content=content, elapsed_seconds=elapsed_seconds)
+
+    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Stream chat completion content deltas.
+
+        Args:
+            messages: OpenAI-compatible chat messages.
+
+        Yields:
+            Text deltas as soon as the provider sends them.
+
+        Raises:
+            LLMClientError: If the API key is missing or the provider request
+                fails.
+        """
+
+        if not self._api_key:
+            raise LLMClientError("OPENAI_API_KEY is not configured")
+
+        payload: dict[str, Any] = {
+            "model": self._config.model,
+            "messages": messages,
+            "temperature": self._config.temperature,
+            "max_tokens": self._config.max_tokens,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self._base_url.rstrip('/')}/chat/completions"
+        started_at = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        body = (await response.aread()).decode("utf-8", errors="replace")
+                        logger.error(
+                            "LLM stream HTTP error status=%s body=%s",
+                            response.status_code,
+                            body[:500],
+                        )
+                        raise LLMClientError("大模型服务返回异常，请检查配置或稍后重试。")
+
+                    async for line in response.aiter_lines():
+                        stripped = line.strip()
+                        if not stripped or stripped.startswith(":"):
+                            continue
+                        if not stripped.startswith("data:"):
+                            continue
+
+                        data_text = stripped.removeprefix("data:").strip()
+                        if data_text == "[DONE]":
+                            break
+
+                        try:
+                            data = json.loads(data_text)
+                        except json.JSONDecodeError:
+                            logger.debug("Skipping malformed LLM stream line: %s", data_text[:200])
+                            continue
+
+                        choices = data.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        choice = choices[0]
+                        if not isinstance(choice, dict):
+                            continue
+
+                        delta = choice.get("delta")
+                        message = choice.get("message")
+                        content = None
+                        if isinstance(delta, dict):
+                            content = delta.get("content")
+                        if content is None and isinstance(message, dict):
+                            content = message.get("content")
+                        if content:
+                            yield str(content)
+        except httpx.TimeoutException as exc:
+            logger.error("LLM stream timed out: %s", exc)
+            raise LLMClientError("大模型请求超时，请稍后重试。") from exc
+        except httpx.RequestError as exc:
+            logger.error("LLM stream network error: %s", exc)
+            raise LLMClientError("大模型网络连接失败，请检查网络或服务地址。") from exc
+
+        logger.info("LLM stream completed elapsed=%.3fs", time.perf_counter() - started_at)
 
 
 def build_mock_grounded_answer(query: str, documents: list[RetrievedDocument]) -> str:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import contextmanager
+from collections.abc import Iterator
 from typing import Protocol
 
 import numpy as np
@@ -12,6 +14,26 @@ from xyfrag.config import RetrievalConfig
 from xyfrag.text import chunk_tokens, l2_normalize, tokenize
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _flag_embedding_transformers_dtype_compat() -> Iterator[None]:
+    """Map FlagEmbedding's `dtype` kwarg to the Transformers 4.x name."""
+
+    from transformers import AutoModel
+
+    original_from_pretrained = AutoModel.from_pretrained
+
+    def from_pretrained_with_torch_dtype(*args: object, **kwargs: object) -> object:
+        if "dtype" in kwargs and "torch_dtype" not in kwargs:
+            kwargs["torch_dtype"] = kwargs.pop("dtype")
+        return original_from_pretrained(*args, **kwargs)
+
+    AutoModel.from_pretrained = from_pretrained_with_torch_dtype  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        AutoModel.from_pretrained = original_from_pretrained  # type: ignore[method-assign]
 
 
 class EmbeddingBackend(Protocol):
@@ -142,11 +164,12 @@ class BGEEmbeddingBackend:
         else:
             from FlagEmbedding import FlagModel
 
-            self._model = FlagModel(
-                model_name,
-                query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
-                use_fp16=False,
-            )
+            with _flag_embedding_transformers_dtype_compat():
+                self._model = FlagModel(
+                    model_name,
+                    query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
+                    use_fp16=False,
+                )
             self._is_m3 = False
 
     def encode(self, texts: list[str]) -> np.ndarray:

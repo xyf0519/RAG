@@ -234,7 +234,7 @@ export function LoginScreen() {
                     )}
                     {error && (
                       <p className={cn(
-                        "rounded-[18px] border border-red-100 bg-red-50 px-4 text-sm font-medium text-red-700",
+                        "rounded-[18px] border border-red-100 bg-red-50 px-4 text-xs font-medium leading-5 text-red-700",
                         dense ? "py-2" : "py-3",
                       )}>
                         {error}

@@ -85,6 +85,33 @@ def test_store_deletes_document_and_invalidates_index(tmp_path: Path) -> None:
         store.load_index(knowledge_base.id)
 
 
+def test_store_deletes_knowledge_base_assets_and_records(tmp_path: Path) -> None:
+    store = KnowledgeBaseStore(make_settings(tmp_path))
+    knowledge_base = store.create_knowledge_base("临时资料库")
+    store.add_document(
+        knowledge_base.id,
+        "rules.md",
+        "# 临时资料库\n请遵守校园管理规定。\n".encode(),
+    )
+    store.add_boundary_item(knowledge_base.id, "校园卡丢了怎么办？", 1)
+    job = store.create_index_job(knowledge_base.id)
+    assert job.status == "succeeded"
+    kb_root = store._kb_root / knowledge_base.id
+    model_root = store._model_root / knowledge_base.id
+    assert kb_root.exists()
+    assert model_root.exists()
+
+    store.delete_knowledge_base(knowledge_base.id)
+
+    assert store.get_knowledge_base(knowledge_base.id) is None
+    assert not kb_root.exists()
+    assert not model_root.exists()
+    with pytest.raises(KeyError):
+        store.delete_knowledge_base(knowledge_base.id)
+    with pytest.raises(ValueError):
+        store.delete_knowledge_base(DEFAULT_KNOWLEDGE_BASE_ID)
+
+
 def test_store_keeps_deleted_legacy_document_deleted(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.paths.raw_docs_dir.mkdir(parents=True)

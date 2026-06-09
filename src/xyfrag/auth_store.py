@@ -198,7 +198,10 @@ class AuthStore:
     def login(self, email: str, password: str) -> AuthUserRecord:
         normalized_email = self.normalize_email(email)
         user_row = self._get_user_row_by_email(normalized_email)
-        if not user_row or not self._verify_password(password, str(user_row["password_hash"])):
+        if not user_row:
+            self.audit(None, normalized_email, "login_failed")
+            raise AuthError("请先注册。")
+        if not self._verify_password(password, str(user_row["password_hash"])):
             self.audit(None, normalized_email, "login_failed")
             raise AuthError("邮箱或密码不正确。")
         if user_row["disabled_at"] is not None:
@@ -269,6 +272,27 @@ class AuthStore:
             ),
         )
         return self.require_user(target.id)
+
+    def delete_user(self, user_id: str, operator: AuthUserRecord) -> None:
+        target = self.require_user(user_id)
+        if target.id == operator.id:
+            raise AuthError("不能删除当前登录账号。")
+        if self.is_core_admin(target.email):
+            raise AuthError("核心管理员不能删除。")
+        with self._lock, self._connect() as connection:
+            connection.execute("DELETE FROM users WHERE id = ?", (target.id,))
+        self.audit(
+            operator.id,
+            operator.email,
+            "user_deleted",
+            json.dumps(
+                {
+                    "target_user_id": target.id,
+                    "target_email": target.email,
+                },
+                ensure_ascii=False,
+            ),
+        )
 
     def update_user_profile(self, user_id: str, name: str, avatar_url: str | None) -> AuthUserRecord:
         user = self.require_user(user_id)
