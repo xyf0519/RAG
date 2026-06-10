@@ -24,7 +24,6 @@ import {
   PenLine,
   Plus,
   RefreshCw,
-  Search,
   Send,
   Settings,
   ShieldCheck,
@@ -52,6 +51,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useRagChatStream } from "@/features/chat/use-rag-chat-stream";
 import { cn, formatSeconds } from "@/shared/lib/utils";
 import type { AuthUser, UserRole } from "@/shared/types/auth";
+import { createPortal } from "react-dom";
 import type {
   BackendHealth,
   ChatMessage,
@@ -409,6 +409,7 @@ export function ChatWorkspace() {
           sessions={chat.sessions}
           onNewSession={startNewSession}
           onOpenSession={openStoredSession}
+          onDeleteSession={chat.deleteSession}
           user={auth.user}
           isAdmin={auth.isAdmin}
           isMobileLayout={isMobileLayout}
@@ -425,6 +426,7 @@ export function ChatWorkspace() {
             <ProductHeader
               health={health}
               healthOk={healthOk}
+              selectedKnowledgeBase={selectedChatKnowledgeBase}
               user={auth.user}
               onSignOut={auth.signOut}
               onOpenSidebar={() => setSidebarOpen(true)}
@@ -446,6 +448,7 @@ export function ChatWorkspace() {
             <BoundaryTrainingWorkspace
               knowledgeBases={knowledgeBases}
               selectedKnowledgeBaseId={selectedWorkspaceKnowledgeBase.id}
+              onRefreshKnowledgeBases={refreshKnowledgeBases}
               onSelect={setSelectedKnowledgeBaseId}
             />
           ) : null}
@@ -597,14 +600,14 @@ function ChatWorkspaceView({
 
           <div
             className={cn(
-              "chat-scroll mobile-chat-scroll flex-1 overflow-y-auto px-4 pb-32 pt-1 sm:px-5 lg:px-4 lg:py-6",
+              "chat-scroll mobile-chat-scroll min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-32 pt-1 sm:px-5 lg:px-4 lg:py-6",
               chat.messages.length === 0 ? "mobile-chat-scroll--empty overflow-hidden" : "",
             )}
           >
             {chat.messages.length === 0 ? (
               <EmptyState user={user} selectedKnowledgeBase={selectedKnowledgeBase} compact={keyboardOpen} />
             ) : (
-              <div className="mx-auto max-w-3xl space-y-5 lg:space-y-6">
+              <div className="mx-auto w-full max-w-3xl min-w-0 space-y-5 overflow-x-hidden lg:space-y-6">
                 {chat.messages.map((message) => (
                   <MessageBubble
                     key={message.id}
@@ -1231,10 +1234,12 @@ function KnowledgeAddWorkspace({
 function BoundaryTrainingWorkspace({
   knowledgeBases,
   selectedKnowledgeBaseId,
+  onRefreshKnowledgeBases,
   onSelect,
 }: {
   knowledgeBases: KnowledgeBase[];
   selectedKnowledgeBaseId: string;
+  onRefreshKnowledgeBases: () => Promise<void>;
   onSelect: (knowledgeBaseId: string) => void;
 }) {
   const selectedKnowledgeBase =
@@ -1250,7 +1255,9 @@ function BoundaryTrainingWorkspace({
   const [modelScope, setModelScope] = useState<"global" | "knowledge_base" | "session">("knowledge_base");
   const [modelAlias, setModelAlias] = useState("应用版");
   const [trainingJob, setTrainingJob] = useState<IndexJob | null>(null);
-  const [aiCount, setAiCount] = useState(8);
+  const [classifierModels, setClassifierModels] = useState<ClassifierModel[]>([]);
+  const [loadingClassifierModels, setLoadingClassifierModels] = useState(false);
+  const [aiCount, setAiCount] = useState(12);
   const [aiHint, setAiHint] = useState("");
   const [notice, setNotice] = useState("样本用于识别可回答范围。");
   const [loading, setLoading] = useState(false);
@@ -1267,6 +1274,11 @@ function BoundaryTrainingWorkspace({
   const approvedInScopeCount = items.filter((item) => item.status === "approved" && item.label === 1).length;
   const approvedOutOfScopeCount = items.filter((item) => item.status === "approved" && item.label === 0).length;
   const draftItems = items.filter((item) => item.status === "draft");
+  const activeClassifierModel =
+    selectedKnowledgeBase.active_classifier_model_id &&
+    selectedKnowledgeBase.active_classifier_model_id !== DISABLED_CLASSIFIER_MODEL_ID
+      ? classifierModels.find((model) => model.id === selectedKnowledgeBase.active_classifier_model_id) ?? null
+      : null;
 
   const refreshItems = useCallback(async () => {
     if (!selectedKnowledgeBase.id) {
@@ -1294,6 +1306,44 @@ function BoundaryTrainingWorkspace({
     setSelectedItemId(null);
     void refreshItems();
   }, [refreshItems]);
+
+  const refreshClassifierModels = useCallback(async () => {
+    if (!selectedKnowledgeBase.id) {
+      return;
+    }
+    setLoadingClassifierModels(true);
+    try {
+      const response = await fetch(`/api/knowledge-bases/${selectedKnowledgeBase.id}/classifier-models`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseError(response, "模型列表加载失败。"));
+      }
+      const models = (await response.json()) as ClassifierModel[];
+      setClassifierModels(models);
+      const activeModel =
+        selectedKnowledgeBase.active_classifier_model_id &&
+        selectedKnowledgeBase.active_classifier_model_id !== DISABLED_CLASSIFIER_MODEL_ID
+          ? models.find((model) => model.id === selectedKnowledgeBase.active_classifier_model_id) ?? null
+          : null;
+      if (activeModel) {
+        setModelName(activeModel.name);
+        setModelScope(activeModel.scope);
+        setModelAlias(activeModel.alias);
+      }
+    } catch (error) {
+      setClassifierModels([]);
+      setNotice(error instanceof Error ? error.message : "模型列表加载失败。");
+    } finally {
+      setLoadingClassifierModels(false);
+    }
+  }, [selectedKnowledgeBase.active_classifier_model_id, selectedKnowledgeBase.id]);
+
+  useEffect(() => {
+    setTrainingJob(null);
+    setClassifierModels([]);
+    void refreshClassifierModels();
+  }, [refreshClassifierModels]);
 
   useEffect(() => {
     if (editingItem) {
@@ -1490,6 +1540,9 @@ function BoundaryTrainingWorkspace({
       const job = (await response.json()) as IndexJob;
       setTrainingJob(job);
       setNotice(job.message);
+      if (job.status === "succeeded") {
+        await Promise.all([refreshClassifierModels(), onRefreshKnowledgeBases()]);
+      }
     } catch (error) {
       setTrainingJob((current) => ({
         id: current?.id ?? `classifier-local-${Date.now()}`,
@@ -1508,9 +1561,11 @@ function BoundaryTrainingWorkspace({
   const visibleItems = items;
   const canTrain = approvedCount >= 4 && approvedInScopeCount > 0 && approvedOutOfScopeCount > 0;
   const trainingHint = canTrain ? "已满足二分类训练条件" : "需至少 4 条确认样本，并包含范围内/范围外";
-  const modelStatus = training ? "running" : trainingJob?.status ?? "idle";
+  const modelStatus = training || loadingClassifierModels ? "running" : trainingJob?.status ?? (activeClassifierModel ? "succeeded" : "idle");
   const modelStatusLabel =
-    modelStatus === "running"
+    loadingClassifierModels && !training
+      ? "正在读取"
+      : modelStatus === "running"
       ? "正在训练"
       : modelStatus === "succeeded"
         ? "训练完成"
@@ -1518,8 +1573,22 @@ function BoundaryTrainingWorkspace({
           ? "训练失败"
           : "待训练";
   const modelStatusDetail =
-    trainingJob?.message ?? (canTrain ? "样本已就绪，可以启动一次新的边界模型训练。" : trainingHint);
-  const modelScopeLabel = modelScope === "global" ? "全局基线" : modelScope === "session" ? "会话实验" : "知识库专属";
+    loadingClassifierModels && !training
+      ? "正在读取已应用的边界模型。"
+      : trainingJob?.message ??
+    (activeClassifierModel
+      ? `已应用 ${activeClassifierModel.name} v${activeClassifierModel.version}，登录后会继续使用。`
+      : canTrain
+        ? "样本已就绪，可以启动一次新的边界模型训练。"
+        : trainingHint);
+  const modelScopeLabel =
+    activeClassifierModel
+      ? classifierScopeLabel(activeClassifierModel.scope)
+      : modelScope === "global"
+        ? "全局基线"
+        : modelScope === "session"
+          ? "会话实验"
+          : "知识库专属";
 
   return (
     <section className="mobile-admin-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3 sm:px-5 lg:h-full lg:overflow-hidden lg:px-6 lg:py-5">
@@ -2173,6 +2242,7 @@ function ProductSidebar({
   sessions,
   onNewSession,
   onOpenSession,
+  onDeleteSession,
   user,
   isAdmin,
   isMobileLayout,
@@ -2190,6 +2260,7 @@ function ProductSidebar({
   sessions: ChatSessionSummary[];
   onNewSession: () => void;
   onOpenSession: (sessionId: string) => void;
+  onDeleteSession: (sessionId: string) => void;
   user: AuthUser;
   isAdmin: boolean;
   isMobileLayout: boolean;
@@ -2237,6 +2308,14 @@ function ProductSidebar({
   function signOutFromMenu() {
     setAccountMenuOpen(false);
     onSignOut();
+  }
+
+  function deleteStoredSession(session: ChatSessionSummary) {
+    const confirmed = window.confirm(`确定删除对话「${session.title}」吗？`);
+    if (!confirmed) {
+      return;
+    }
+    onDeleteSession(session.id);
   }
 
   return (
@@ -2415,22 +2494,35 @@ function ProductSidebar({
               </div>
               <div className="space-y-2 lg:space-y-2">
                 {sessions.length ? sessions.map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    type="button"
-                    onClick={() => onOpenSession(session.id)}
-                    className="w-full rounded-2xl bg-white px-0 py-2 text-left text-slate-950 transition hover:bg-[var(--panel-muted)] lg:rounded-md lg:border lg:border-[var(--border)] lg:bg-white/72 lg:px-3 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
+                    className="group/session flex w-full items-center gap-2 rounded-2xl bg-white px-0 py-2 text-slate-950 transition hover:bg-[var(--panel-muted)] lg:rounded-md lg:border lg:border-[var(--border)] lg:bg-white/72 lg:px-2 lg:py-2 lg:shadow-sm lg:hover:border-[var(--border-strong)] lg:hover:bg-white"
                   >
-                    <span className="block truncate text-[16px] font-semibold lg:text-sm lg:font-normal lg:text-[var(--foreground)]">
-                      {session.title}
-                    </span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-[13px] text-slate-500 lg:text-xs lg:text-[var(--muted)]">
-                      <span>{formatRelativeTime(session.updatedAt)}</span>
-                      <span className="min-w-0 truncate">
-                        {session.knowledgeBaseName ?? `${session.turnCount} 轮`}
+                    <button
+                      type="button"
+                      onClick={() => onOpenSession(session.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <span className="block truncate text-[16px] font-semibold lg:text-sm lg:font-normal lg:text-[var(--foreground)]">
+                        {session.title}
                       </span>
-                    </span>
-                  </button>
+                      <span className="mt-1 flex items-center justify-between gap-2 text-[13px] text-slate-500 lg:text-xs lg:text-[var(--muted)]">
+                        <span>{formatRelativeTime(session.updatedAt)}</span>
+                        <span className="min-w-0 truncate">
+                          {session.knowledgeBaseName ?? `${session.turnCount} 轮`}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 opacity-80 transition hover:bg-[var(--danger-soft)] hover:text-[var(--danger)] lg:h-7 lg:w-7 lg:opacity-0 lg:group-hover/session:opacity-100 lg:focus-visible:opacity-100"
+                      onClick={() => deleteStoredSession(session)}
+                      title={`删除对话：${session.title}`}
+                      aria-label="删除对话"
+                    >
+                      <Trash2 size={15} aria-hidden="true" />
+                    </button>
+                  </div>
                 )) : (
                   <div className="rounded-2xl bg-white/58 px-0 py-4 text-[16px] font-semibold text-slate-950 lg:rounded-lg lg:border lg:border-dashed lg:border-[var(--border)] lg:px-3 lg:text-sm lg:font-normal lg:text-[var(--muted)]">
                     暂无最近对话
@@ -3250,6 +3342,7 @@ function UserGuideModal({
 function ProductHeader({
   health,
   healthOk,
+  selectedKnowledgeBase,
   user,
   onSignOut,
   onOpenSidebar,
@@ -3257,6 +3350,7 @@ function ProductHeader({
 }: {
   health: BackendHealth | null;
   healthOk: boolean;
+  selectedKnowledgeBase: KnowledgeBase;
   user: AuthUser;
   onSignOut: () => void;
   onOpenSidebar: () => void;
@@ -3275,13 +3369,6 @@ function ProductHeader({
             <Menu size={24} strokeWidth={2.2} aria-hidden="true" />
             {!healthOk ? <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" /> : null}
           </button>
-          <div className="hidden min-w-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 shadow-sm md:flex">
-            <Search size={15} className="text-[var(--muted)]" aria-hidden="true" />
-            <span className="truncate text-sm text-[var(--muted)]">搜索会话、文档或引用来源</span>
-            <span className="ml-8 rounded-md border border-[var(--border)] bg-[var(--panel-muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
-              ⌘ /
-            </span>
-          </div>
           <div className="min-w-0 md:hidden">
             <div className="inline-flex h-12 max-w-[210px] items-center gap-2 rounded-full bg-white/84 px-5 text-lg font-semibold tracking-normal text-slate-950 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80">
               <span className="truncate">{PRODUCT_NAME}</span>
@@ -3291,14 +3378,10 @@ function ProductHeader({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="hidden h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm lg:flex">
-            <Database size={14} className="text-[var(--accent)]" aria-hidden="true" />
-            <span className="font-medium text-[var(--accent-strong)]">正常</span>
-          </div>
+          <SystemStatusMenu health={health} healthOk={healthOk} selectedKnowledgeBase={selectedKnowledgeBase} />
           <Button type="button" variant="ghost" size="icon" title="使用说明" aria-label="打开使用说明" className="h-12 w-12 rounded-full bg-white/84 shadow-[0_12px_34px_rgba(15,23,42,0.08)] ring-1 ring-white/80 hover:bg-white lg:h-8 lg:w-8 lg:rounded-md lg:bg-transparent lg:shadow-none lg:ring-0" onClick={onOpenHelp}>
             <HelpCircle size={22} className="lg:h-4 lg:w-4" aria-hidden="true" />
           </Button>
-          <HealthPill ok={healthOk} label={health?.app ?? PRODUCT_NAME} />
           <Button type="button" variant="secondary" size="sm" className="hidden h-8 rounded-full sm:inline-flex" title={`${user.name} · 退出登录`} onClick={onSignOut}>
             <LogOut size={15} aria-hidden="true" />
             <span className="hidden max-w-[96px] truncate sm:inline">{user.name}</span>
@@ -3309,23 +3392,128 @@ function ProductHeader({
   );
 }
 
+function SystemStatusMenu({
+  health,
+  healthOk,
+  selectedKnowledgeBase,
+}: {
+  health: BackendHealth | null;
+  healthOk: boolean;
+  selectedKnowledgeBase: KnowledgeBase;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const knowledgeOk = isUsableKnowledgeBase(selectedKnowledgeBase);
+  const allOk = healthOk && knowledgeOk;
+  const knowledgeIssue =
+    selectedKnowledgeBase.status !== "active"
+      ? "知识库已停用"
+      : selectedKnowledgeBase.index_status === "ready"
+        ? `索引已就绪，${selectedKnowledgeBase.document_count} 个文档`
+        : `索引${indexStatusLabel(selectedKnowledgeBase.index_status)}，${selectedKnowledgeBase.document_count} 个文档`;
+  const serviceLabel = healthOk ? "在线" : health ? "离线" : "检查中";
+  const statusLabel = allOk ? "全部正常" : "状态异常";
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      if (containerRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative hidden sm:block">
+      <button
+        type="button"
+        className={cn(
+          "flex h-8 w-8 items-center justify-center rounded-full border bg-white/72 p-0 shadow-sm transition hover:bg-white",
+          allOk ? "border-[var(--border)]" : "border-[var(--danger-border)]",
+        )}
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={statusLabel}
+        title="查看系统状态"
+      >
+        <HeartPulse size={14} className={allOk ? "text-[var(--accent)]" : "text-[var(--danger)]"} aria-hidden="true" />
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[280px] overflow-hidden rounded-xl border border-[var(--border)] bg-white/96 p-2 shadow-[0_24px_70px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+          <StatusDetailRow
+            icon={Database}
+            label={selectedKnowledgeBase.name}
+            value={knowledgeOk ? "正常" : "不正常"}
+            ok={knowledgeOk}
+            detail={knowledgeIssue}
+          />
+          <div className="my-2 h-px bg-[var(--border)]" />
+          <StatusDetailRow
+            icon={HeartPulse}
+            label={health?.app ?? PRODUCT_NAME}
+            value={serviceLabel}
+            ok={healthOk}
+            detail={healthOk ? "后端健康检查通过" : health ? "后端健康检查未通过" : "正在获取后端健康状态"}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StatusDetailRow({
+  icon: Icon,
+  label,
+  value,
+  ok,
+  detail,
+}: {
+  icon: typeof Database;
+  label: string;
+  value: string;
+  ok: boolean;
+  detail: string;
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg px-2 py-2">
+      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", ok ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]" : "bg-[var(--danger-soft)] text-[var(--danger)]")}>
+        <Icon size={16} aria-hidden="true" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-3">
+          <p className="truncate text-sm font-semibold text-[var(--foreground)]">{label}</p>
+          <span className={cn("shrink-0 text-xs font-semibold", ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]")}>{value}</span>
+        </div>
+        <p className="mt-1 truncate text-[11px] text-[var(--muted)]">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
 function IconTooltip({ label }: { label: string }) {
   return (
     <span className="pointer-events-none absolute left-[calc(100%+12px)] top-1/2 z-[9999] hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-950 px-3 py-1.5 text-sm font-semibold text-white opacity-0 shadow-[0_18px_40px_rgba(15,23,42,0.28)] ring-1 ring-white/10 transition-all duration-200 ease-out group-hover:translate-x-0.5 group-hover:opacity-100 lg:block">
       {label}
     </span>
-  );
-}
-
-function HealthPill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <div className="hidden h-8 items-center gap-2 rounded-full border border-[var(--border)] bg-white/72 px-3 text-xs shadow-sm sm:flex">
-      <HeartPulse size={14} className={ok ? "text-[var(--accent)]" : "text-[var(--danger)]"} />
-      <span className="hidden max-w-[120px] truncate text-[var(--muted)] sm:inline">{label}</span>
-      <span className={ok ? "text-[var(--accent-strong)]" : "text-[var(--danger)]"}>
-        {ok ? "在线" : "离线"}
-      </span>
-    </div>
   );
 }
 
@@ -3426,6 +3614,7 @@ function KnowledgeBaseSelect({
     knowledgeBases.find((item) => item.id === selectedId) ??
     options[0] ??
     DEFAULT_KNOWLEDGE_BASE;
+  const selectedTitle = getKnowledgeBaseTitle(selectedKnowledgeBase);
 
   useEffect(() => {
     if (!open) {
@@ -3460,12 +3649,14 @@ function KnowledgeBaseSelect({
         aria-label="选择知识库"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="group flex h-10 w-full min-w-0 items-center gap-1.5 rounded-full border border-white/82 bg-white/74 px-3 text-sm font-semibold text-[var(--foreground)] shadow-[0_12px_30px_rgba(15,23,42,0.07)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:border-white hover:bg-white hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)] lg:h-11 lg:max-w-[260px] lg:gap-2 lg:bg-white/86 lg:px-4 lg:text-sm"
+        className="group flex h-10 w-full min-w-0 items-center gap-1.5 rounded-full border border-white/82 bg-white/74 px-3 text-[13px] font-semibold text-[var(--foreground)] shadow-[0_12px_30px_rgba(15,23,42,0.07)] backdrop-blur-2xl transition hover:-translate-y-0.5 hover:border-white hover:bg-white hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)] lg:h-11 lg:max-w-[260px] lg:gap-2 lg:bg-white/86 lg:px-4 lg:text-[13px]"
       >
         <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--accent-soft)] bg-white text-[var(--accent)] sm:flex">
           <Database size={16} aria-hidden="true" />
         </span>
-        <span className="truncate">{selectedKnowledgeBase.name}</span>
+        <span className="truncate" title={selectedTitle}>
+          {selectedTitle}
+        </span>
         <ChevronRight
           size={16}
           className={cn(
@@ -3476,13 +3667,15 @@ function KnowledgeBaseSelect({
         />
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+10px)] z-50 min-w-[min(82vw,18rem)] overflow-hidden rounded-3xl border border-white/80 bg-white/90 p-2 shadow-[0_28px_80px_rgba(15,23,42,0.18)] backdrop-blur-2xl lg:left-auto lg:right-0 lg:w-72 lg:bg-white/96">
+        <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+60px)] z-50 overflow-hidden rounded-3xl border border-white/80 bg-white/90 p-2 shadow-[0_28px_80px_rgba(15,23,42,0.18)] backdrop-blur-2xl sm:absolute sm:left-0 sm:right-0 sm:top-[calc(100%+10px)] sm:min-w-[min(86vw,18rem)] lg:left-auto lg:right-0 lg:w-72 lg:bg-white/96">
           <div className="px-3 py-2">
-            <p className="text-xs font-medium text-[var(--muted)]">当前知识库</p>
+            <p className="text-[11px] font-medium text-[var(--muted)]">当前知识库</p>
           </div>
-          <div className="space-y-1">
+          <div className="max-h-[min(64vh,460px)] space-y-1 overflow-y-auto overscroll-contain pr-1 sm:max-h-[min(58vh,420px)]">
             {options.map((knowledgeBase) => {
               const active = knowledgeBase.id === selectedId;
+              const title = getKnowledgeBaseTitle(knowledgeBase);
+              const description = getKnowledgeBaseDescription(knowledgeBase);
               return (
                 <button
                   key={knowledgeBase.id}
@@ -3492,7 +3685,7 @@ function KnowledgeBaseSelect({
                     setOpen(false);
                   }}
                   className={cn(
-                    "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition",
+                    "flex w-full items-center gap-2.5 rounded-2xl px-3 py-2 text-left transition",
                     active
                       ? "bg-[var(--accent-tint)] text-[var(--accent-strong)]"
                       : "text-[var(--foreground)] hover:bg-[var(--panel-muted)]",
@@ -3507,9 +3700,11 @@ function KnowledgeBaseSelect({
                     {active ? <CheckCircle2 size={15} aria-hidden="true" /> : <Database size={15} aria-hidden="true" />}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{knowledgeBase.name}</span>
-                    <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">
-                      {indexStatusLabel(knowledgeBase.index_status)} · {knowledgeBase.document_count} 个文档
+                    <span className="block truncate text-[13px] font-semibold" title={title}>
+                      {title}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] leading-4 text-[var(--muted)]" title={description}>
+                      {description}
                     </span>
                   </span>
                 </button>
@@ -3520,6 +3715,18 @@ function KnowledgeBaseSelect({
       ) : null}
     </div>
   );
+}
+
+function getKnowledgeBaseTitle(knowledgeBase: KnowledgeBase) {
+  return knowledgeBase.name.trim() || "知识库";
+}
+
+function getKnowledgeBaseDescription(knowledgeBase: KnowledgeBase) {
+  const description = knowledgeBase.description.trim();
+  if (description) {
+    return description;
+  }
+  return `${indexStatusLabel(knowledgeBase.index_status)} · ${knowledgeBase.document_count} 个文档`;
 }
 
 function StatusChip({ label, tone = "muted" }: { label: string; tone?: "ok" | "muted" | "warning" }) {
@@ -3791,7 +3998,7 @@ function MessageBubble({
   const isUser = message.role === "user";
   const sourceByIndex = new Map((message.sources ?? []).map((source) => [source.index, source]));
   return (
-    <div className={cn("flex gap-2.5 lg:gap-3", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex w-full min-w-0 gap-2.5 overflow-x-hidden lg:gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser ? (
         <div className="mt-1 hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/78 text-[var(--accent-strong)] shadow-sm backdrop-blur sm:flex">
           <Bot size={17} aria-hidden="true" />
@@ -3799,7 +4006,7 @@ function MessageBubble({
       ) : null}
       <article
         className={cn(
-          "group max-w-[min(720px,94%)] text-[15px] leading-7 lg:max-w-[min(720px,92%)]",
+          "group min-w-0 max-w-[min(720px,94%)] text-[15px] leading-7 lg:max-w-[min(720px,92%)]",
           isUser
             ? "rounded-[24px] bg-white/86 px-4 py-2.5 text-[var(--foreground)] shadow-sm backdrop-blur lg:rounded-3xl lg:border lg:border-[var(--accent-soft)] lg:bg-white/78 lg:px-5 lg:py-3"
             : "text-[var(--foreground)]",
@@ -4007,13 +4214,15 @@ function CitationPopover({
   showTitle?: boolean;
 }) {
   const [pinned, setPinned] = useState(false);
-  const [mobilePopoverStyle, setMobilePopoverStyle] = useState<{
+  const [hovered, setHovered] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState<{
     left: number;
     top: number;
     transform: string;
   } | null>(null);
   const longPressTimer = useRef<number | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popoverVisible = Boolean((pinned || hovered) && popoverStyle);
 
   useEffect(() => {
     if (!pinned) {
@@ -4025,12 +4234,12 @@ function CitationPopover({
         return;
       }
       setPinned(false);
-      setMobilePopoverStyle(null);
+      setPopoverStyle(null);
     }
     function clearOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setPinned(false);
-        setMobilePopoverStyle(null);
+        setPopoverStyle(null);
       }
     }
     window.addEventListener("pointerdown", clearPinned);
@@ -4048,10 +4257,9 @@ function CitationPopover({
     }
   }
 
-  function pinMobilePopover() {
+  function updatePopoverPosition() {
     const button = buttonRef.current;
     if (!button) {
-      setPinned(true);
       return;
     }
 
@@ -4069,17 +4277,32 @@ function CitationPopover({
     const maxLeft = viewportLeft + viewportWidth - margin - halfWidth;
     const left = Math.min(Math.max(preferredLeft, minLeft), maxLeft);
     const topSpace = triggerRect.top - viewportTop;
-    const belowTop = Math.min(
-      triggerRect.bottom + 10,
-      viewportTop + viewportHeight - margin - 148,
-    );
-    const top = topSpace > 164 ? triggerRect.top - 10 : Math.max(viewportTop + margin, belowTop);
+    const hasAboveSpace = topSpace > 176;
+    const top = hasAboveSpace
+      ? triggerRect.top - 10
+      : Math.min(triggerRect.bottom + 10, viewportTop + viewportHeight - margin - 148);
 
-    setMobilePopoverStyle({
+    setPopoverStyle({
       left,
-      top,
-      transform: topSpace > 164 ? "translate(-50%, -100%)" : "translate(-50%, 0)",
+      top: Math.max(viewportTop + margin, top),
+      transform: hasAboveSpace ? "translate(-50%, -100%)" : "translate(-50%, 0)",
     });
+  }
+
+  function showHoverPopover() {
+    updatePopoverPosition();
+    setHovered(true);
+  }
+
+  function hideHoverPopover() {
+    setHovered(false);
+    if (!pinned) {
+      setPopoverStyle(null);
+    }
+  }
+
+  function pinMobilePopover() {
+    updatePopoverPosition();
     setPinned(true);
   }
 
@@ -4088,6 +4311,10 @@ function CitationPopover({
       <button
         ref={buttonRef}
         type="button"
+        onMouseEnter={showHoverPopover}
+        onMouseLeave={hideHoverPopover}
+        onFocus={showHoverPopover}
+        onBlur={hideHoverPopover}
         onPointerDown={(event) => {
           if (event.pointerType === "mouse") {
             return;
@@ -4107,36 +4334,34 @@ function CitationPopover({
         [{index}]
         {showTitle && source ? <span className="ml-1 max-w-[9rem] truncate">{source.title}</span> : null}
       </button>
-      <span
-        data-citation-popover
-        style={
-          pinned && mobilePopoverStyle
-            ? {
-                left: `${mobilePopoverStyle.left}px`,
-                top: `${mobilePopoverStyle.top}px`,
-                transform: mobilePopoverStyle.transform,
+      {typeof document !== "undefined"
+        ? createPortal(
+            <span
+              data-citation-popover
+              style={
+                popoverVisible && popoverStyle
+                  ? {
+                      left: `${popoverStyle.left}px`,
+                      top: `${popoverStyle.top}px`,
+                      transform: popoverStyle.transform,
+                    }
+                  : undefined
               }
-            : undefined
-        }
-        className={cn(
-          "pointer-events-none z-50 rounded-2xl border border-white/75 bg-white/72 p-3 text-left text-xs leading-5 text-slate-700 opacity-0 shadow-[0_24px_70px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.88)] backdrop-blur-2xl transition duration-200",
-          pinned
-            ? "fixed w-[min(320px,calc(100vw-32px))] opacity-100"
-            : cn(
-                "absolute bottom-[calc(100%+10px)] w-[min(78vw,320px)] translate-y-1 group-hover/citation:translate-y-0 group-hover/citation:opacity-100 group-focus-within/citation:translate-y-0 group-focus-within/citation:opacity-100",
-                showTitle
-                  ? "left-0"
-                  : "left-1/2 -translate-x-1/2 group-hover/citation:-translate-x-1/2 group-focus-within/citation:-translate-x-1/2",
-              ),
-        )}
-      >
-        <span className="mb-1 block truncate text-[11px] font-semibold text-slate-950">
-          {source ? source.title : "引用来源"}
-        </span>
-        <span className="line-clamp-6 block">
-          {source ? source.text : "暂无可展示的引用片段。"}
-        </span>
-      </span>
+              className={cn(
+                "pointer-events-none fixed z-[120] w-[min(320px,calc(100vw-32px))] rounded-2xl border border-white/75 bg-white/88 p-3 text-left text-xs leading-5 text-slate-700 opacity-0 shadow-[0_24px_70px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.88)] backdrop-blur-2xl transition duration-200",
+                popoverVisible ? "opacity-100" : "",
+              )}
+            >
+              <span className="mb-1 block truncate text-[11px] font-semibold text-slate-950">
+                {source ? source.title : "引用来源"}
+              </span>
+              <span className="line-clamp-6 block">
+                {source ? source.text : "暂无可展示的引用片段。"}
+              </span>
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
@@ -4193,9 +4418,9 @@ function Composer({
 }) {
   const sendDisabled = status === "streaming" || !knowledgeReady;
   return (
-    <form onSubmit={onSubmit} className="mobile-composer pointer-events-none relative z-20 shrink-0 px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
-      <div className="mobile-composer-card pointer-events-auto mx-auto max-w-3xl rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
-        <div className="flex min-h-[52px] items-end gap-2 lg:block lg:min-h-0">
+    <form onSubmit={onSubmit} className="mobile-composer pointer-events-none relative z-20 min-w-0 shrink-0 overflow-x-hidden px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
+      <div className="mobile-composer-card pointer-events-auto mx-auto w-full max-w-3xl min-w-0 overflow-hidden rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
+        <div className="flex min-h-[52px] min-w-0 items-end gap-2 lg:block lg:min-h-0">
           <span className="mb-1.5 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.16)] ring-1 ring-white/90 lg:hidden">
             <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 object-cover" aria-hidden="true" />
           </span>
@@ -4212,7 +4437,7 @@ function Composer({
               }
             }}
             placeholder={knowledgeReady ? "问问 Maverella" : "知识库加载中"}
-            className="chat-composer-input min-h-[48px] flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
+            className="chat-composer-input min-h-[48px] min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
             rows={1}
             maxLength={2000}
           />
@@ -4225,9 +4450,9 @@ function Composer({
           </Button>
         </div>
       </div>
-      <p className="mx-auto mt-2 hidden max-w-3xl px-2 text-center text-xs leading-5 text-[var(--muted)] sm:text-sm lg:block">
+      <p className="mx-auto mt-2 hidden max-w-3xl px-2 text-center text-[11px] leading-4 text-[#8a8a8a] lg:block">
         遇到无法解决的问题，请联系管理员：
-        <a className="font-medium text-[var(--accent-strong)] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
+        <a className="font-normal text-[#8a8a8a] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
           {ADMIN_CONTACT_EMAIL}
         </a>
       </p>

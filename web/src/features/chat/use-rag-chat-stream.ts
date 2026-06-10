@@ -263,6 +263,33 @@ export function useRagChatStream() {
     window.localStorage.setItem(SESSION_KEY, nextSession);
   }, []);
 
+  const deleteSession = useCallback(
+    (targetSessionId: string) => {
+      window.localStorage.removeItem(`${STORAGE_KEY}.${targetSessionId}`);
+      setSessions((current) => {
+        const nextSessions = current.filter((session) => session.id !== targetSessionId);
+        window.localStorage.setItem(SESSIONS_KEY, JSON.stringify(nextSessions));
+        return nextSessions;
+      });
+
+      if (targetSessionId !== sessionId) {
+        return;
+      }
+
+      abortRef.current?.abort();
+      const nextSession = createId("session");
+      setSessionId(nextSession);
+      setMessages([]);
+      setEvents([]);
+      setActiveSources([]);
+      setActiveFinal(null);
+      setLastError(null);
+      setStatus("idle");
+      window.localStorage.setItem(SESSION_KEY, nextSession);
+    },
+    [sessionId],
+  );
+
   const openSession = useCallback(
     (nextSessionId: string) => {
       if (nextSessionId === sessionId) {
@@ -336,6 +363,7 @@ export function useRagChatStream() {
     stop,
     retry,
     newSession,
+    deleteSession,
     openSession,
     updateMessageFeedback,
     toggleFavorite,

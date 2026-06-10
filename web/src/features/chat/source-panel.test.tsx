@@ -232,7 +232,7 @@ describe("ChatWorkspace", () => {
     );
 
     expect((await screen.findAllByRole("heading", { name: "Maverella" })).length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText("问问 Maverella")).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("问问 Maverella")).toBeInTheDocument();
     expect(screen.getByText(/想聊点什么？/)).toBeInTheDocument();
     expect(screen.queryByText("挂科后什么时候申请补考？")).not.toBeInTheDocument();
   });

@@ -216,7 +216,7 @@ class BoundaryDatasetItemUpdateRequest(BaseModel):
 
 
 class BoundaryDatasetGenerateRequest(BaseModel):
-    count: int = Field(default=8, ge=1, le=30)
+    count: int = Field(default=12, ge=1, le=60)
     label_hint: str = Field(default="", max_length=300)
 
 
@@ -1017,7 +1017,7 @@ async def generate_boundary_items(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="知识库不存在。") from exc
 
-    knowledge_text = store.sample_knowledge_text(knowledge_base.id, limit=3600)
+    knowledge_text = store.sample_knowledge_text(knowledge_base.id, limit=6000)
     samples = await _generate_boundary_sample_candidates(
         knowledge_base.name,
         knowledge_text,
@@ -1097,36 +1097,64 @@ async def _generate_boundary_sample_candidates(
     label_hint: str,
 ) -> list[dict[str, int | str]]:
     settings = get_settings()
+    requested_positive = (count + 1) // 2
+    requested_negative = count // 2
     prompt = f"""
-请为知识库「{knowledge_base_name}」生成二分类边界训练样本。
-数量：{count}
-标签含义：1 表示知识库范围内，0 表示知识库范围外。
-类别提示：{label_hint or "兼顾范围内与范围外问题"}
-知识库摘要：
-{knowledge_text[:3200] or "暂无资料摘要"}
+你要为知识库「{knowledge_base_name}」生成“边界识别”二分类训练样本，目标是让模型学会区分哪些用户问题应该由这个知识库回答。
 
-只返回 JSON 数组。每项格式为 {{"text":"用户可能提出的问题","label":1}}。
-""".strip()
+请严格遵守：
+1. 只围绕下方“资料摘要”中的主题、对象、规则、流程、条件、部门、时间、地点和术语生成。
+2. label=1 表示范围内：问题必须能直接或主要依据资料摘要回答，不能凭常识扩展。
+3. label=0 表示范围外：优先生成“近域难负例”，即看起来和资料库同属一个大场景，但资料摘要没有覆盖，不能回答；少用“写诗、股票、餐厅、游戏、娱乐新闻”这类明显无关问题。
+4. 如果生成课程、评奖、借阅、场馆、安全等问题，必须和资料摘要中实际出现的知识库类型匹配，不能随意跨知识库。
+5. 每条问题要像真实用户提问，短句，避免“这个知识库/资料摘要/文件中”这类元描述。
+6. 不要编造资料摘要没有出现的具体政策、老师、课程、奖项、机构或日期。
+
+数量：{count}
+其中范围内约 {requested_positive} 条，范围外约 {requested_negative} 条。
+类别提示：{label_hint or "按资料摘要自动覆盖核心主题，并补充近域越界问题"}
+
+资料摘要：
+{knowledge_text[:5600] or "暂无资料摘要"}
+
+只返回 JSON 数组，不要解释。每项格式为 {{"text":"用户可能提出的问题","label":1}}。
+    """.strip()
     try:
         response = await OpenAICompatibleClient(settings.llm).chat(
             [
                 {
                     "role": "system",
-                    "content": "你是知识库边界训练样本生成助手，只输出 JSON。",
+                    "content": "你是严格的知识库边界训练样本生成助手，只输出 JSON。你必须优先生成贴合资料摘要的正样本和近域难负例。",
                 },
                 {"role": "user", "content": prompt},
             ]
         )
-        parsed = _parse_boundary_samples(response.content, count)
-        if parsed:
+        parsed = _parse_boundary_samples(
+            response.content,
+            count,
+            knowledge_base_name=knowledge_base_name,
+            label_hint=label_hint,
+            knowledge_text=knowledge_text,
+        )
+        if len(parsed) >= count:
             return parsed
+        if parsed:
+            fallback = _fallback_boundary_samples(knowledge_base_name, count, label_hint, knowledge_text)
+            return _merge_boundary_samples(parsed, fallback, count)
     except LLMClientError:
         pass
 
     return _fallback_boundary_samples(knowledge_base_name, count, label_hint, knowledge_text)
 
 
-def _parse_boundary_samples(content: str, count: int) -> list[dict[str, int | str]]:
+def _parse_boundary_samples(
+    content: str,
+    count: int,
+    *,
+    knowledge_base_name: str,
+    label_hint: str,
+    knowledge_text: str,
+) -> list[dict[str, int | str]]:
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
@@ -1140,16 +1168,116 @@ def _parse_boundary_samples(content: str, count: int) -> list[dict[str, int | st
     if not isinstance(data, list):
         return []
     samples: list[dict[str, int | str]] = []
+    seen: set[str] = set()
     for item in data:
         if not isinstance(item, dict):
             continue
         text = str(item.get("text", "")).strip()
         label = item.get("label")
-        if text and label in {0, 1}:
-            samples.append({"text": text[:1000], "label": int(label)})
+        if not text or label not in {0, 1}:
+            continue
+        normalized = _normalize_boundary_question(text)
+        if normalized in seen:
+            continue
+        label_int = int(label)
+        if not _is_usable_boundary_candidate(
+            text,
+            label_int,
+            knowledge_base_name=knowledge_base_name,
+            label_hint=label_hint,
+            knowledge_text=knowledge_text,
+        ):
+            continue
+        seen.add(normalized)
+        samples.append({"text": text[:1000], "label": label_int})
         if len(samples) >= count:
             break
     return samples
+
+
+def _normalize_boundary_question(text: str) -> str:
+    return re.sub(r"[\s，。！？,.!?；;：:、]+", "", text).lower()
+
+
+def _is_usable_boundary_candidate(
+    text: str,
+    label: int,
+    *,
+    knowledge_base_name: str,
+    label_hint: str,
+    knowledge_text: str,
+) -> bool:
+    if len(text) < 4:
+        return False
+    lowered = text.lower()
+    generic_off_topic = {
+        "写诗",
+        "股票",
+        "餐厅",
+        "游戏",
+        "娱乐新闻",
+        "电影",
+        "天气",
+    }
+    if label == 0 and any(term in text for term in generic_off_topic):
+        return False
+    if label == 1:
+        terms = _extract_boundary_terms(knowledge_base_name, label_hint, knowledge_text)
+        return not terms or any(term and term.lower() in lowered for term in terms[:80])
+    return True
+
+
+def _extract_boundary_terms(knowledge_base_name: str, label_hint: str, knowledge_text: str) -> list[str]:
+    source = "\n".join([knowledge_base_name, label_hint, knowledge_text[:5000]])
+    candidates = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,18}", source)
+    stopwords = {
+        "可以",
+        "需要",
+        "进行",
+        "相关",
+        "资料",
+        "知识库",
+        "问题",
+        "如果",
+        "一个",
+        "以及",
+        "或者",
+        "规定",
+    }
+    terms: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        term = candidate.strip()
+        if term in stopwords or term.isdigit() or len(term) < 2:
+            continue
+        if term not in seen:
+            terms.append(term)
+            seen.add(term)
+        if len(terms) >= 120:
+            break
+    return terms
+
+
+def _merge_boundary_samples(
+    primary: list[dict[str, int | str]],
+    fallback: list[dict[str, int | str]],
+    count: int,
+) -> list[dict[str, int | str]]:
+    merged: list[dict[str, int | str]] = []
+    seen: set[str] = set()
+    for sample in [*primary, *fallback]:
+        text = str(sample.get("text", "")).strip()
+        label = sample.get("label")
+        if not text or label not in {0, 1}:
+            continue
+        normalized = _normalize_boundary_question(text)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append({"text": text[:1000], "label": int(label)})
+        if len(merged) >= count:
+            break
+    return merged
 
 
 def _fallback_boundary_samples(
@@ -1158,23 +1286,28 @@ def _fallback_boundary_samples(
     label_hint: str,
     knowledge_text: str,
 ) -> list[dict[str, int | str]]:
+    terms = _extract_boundary_terms(knowledge_base_name, label_hint, knowledge_text)
+    topic = label_hint.strip() or (terms[0] if terms else knowledge_base_name)
+    secondary = terms[1] if len(terms) > 1 else knowledge_base_name
     positive_seed = [
-        f"{knowledge_base_name}相关流程如何办理？",
-        f"{knowledge_base_name}里的资料适用于哪些场景？",
-        "资料中提到的申请条件是什么？",
-        "如果相关证件遗失应该怎么处理？",
-        "办理这项业务需要联系哪个部门？",
+        f"{topic} 的申请条件是什么？",
+        f"{topic} 相关流程如何办理？",
+        f"{secondary} 需要准备哪些材料？",
+        f"{topic} 的办理时间或截止要求是什么？",
+        f"{knowledge_base_name} 中提到的负责部门是谁？",
+        f"{topic} 不符合条件时应该怎么处理？",
     ]
     negative_seed = [
-        "帮我写一首诗。",
-        "今天股票应该怎么买？",
-        "推荐附近最好吃的餐厅。",
-        "给我生成一段游戏剧情。",
-        "解释一个和本知识库无关的娱乐新闻。",
+        f"{topic} 的任课老师是谁？",
+        f"{topic} 的考试答案是什么？",
+        f"{secondary} 有没有未在材料中列出的补贴政策？",
+        f"{knowledge_base_name} 之外的学院内部安排是什么？",
+        f"{topic} 能否直接帮我预约或代办？",
+        f"{secondary} 的个人成绩或名单能查询吗？",
     ]
     if label_hint:
         positive_seed.insert(0, f"{label_hint} 的范围内问题应该如何处理？")
-        negative_seed.insert(0, f"请评价一款和 {label_hint} 无关的消费电子产品。")
+        negative_seed.insert(0, f"{label_hint} 之外的具体个人安排能查询吗？")
     if knowledge_text:
         title = next(
             (line.lstrip("#").strip() for line in knowledge_text.splitlines() if line.strip().startswith("#")),

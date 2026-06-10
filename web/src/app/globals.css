@@ -175,6 +175,12 @@ input:focus-visible {
 .chat-scroll {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
+}
+
+.chat-scroll > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chat-scroll::-webkit-scrollbar-thumb {
