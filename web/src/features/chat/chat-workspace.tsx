@@ -44,6 +44,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { BorderGlow } from "@/components/effects/border-glow";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { LoginScreen } from "@/features/auth/login-screen";
@@ -115,6 +116,8 @@ const CHAT_BACKGROUND_SRC = "/images/background.png";
 const PRODUCT_NAME = "Maverella";
 const ADMIN_CONTACT_EMAIL = "xinyufei@zju.edu.cn";
 const DISABLED_CLASSIFIER_MODEL_ID = "disabled";
+const WELCOME_GLOW_COLORS = ["#f0faf8", "#8ee3d8", "#006c63"];
+const COMPOSER_GLOW_COLORS = ["#f7fffb", "#62d8c7", "#006c63"];
 
 type TraceStage = "idle" | "boundary" | "rewrite" | "retrieve" | "rerank" | "generate" | "complete";
 type FeedbackStats = {
@@ -629,7 +632,14 @@ function ChatWorkspaceView({
           </div>
         ) : null}
 
-        <Composer input={input} status={chat.status} knowledgeReady={knowledgeReady} onInput={onInput} onSubmit={onSubmit} />
+        <Composer
+          input={input}
+          status={chat.status}
+          knowledgeReady={knowledgeReady}
+          isMobileLayout={isMobileLayout}
+          onInput={onInput}
+          onSubmit={onSubmit}
+        />
       </section>
 
       <aside
@@ -3959,6 +3969,21 @@ function EmptyState({
   compact?: boolean;
 }) {
   const firstName = user.name?.trim() || user.email.split("@", 1)[0] || "你好";
+  const content = (
+    <>
+      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-white/76 shadow-sm ring-1 ring-white/80 lg:mb-4 lg:h-12 lg:w-12 lg:border lg:border-[rgba(0,108,99,0.18)] lg:bg-white/86 lg:text-[var(--accent-strong)]">
+        <Image src="/images/icon.png" alt="" width={56} height={56} className="h-14 w-14 object-cover lg:hidden" aria-hidden="true" />
+        <Sparkles size={21} className="hidden lg:block" aria-hidden="true" />
+      </div>
+      <h2 className="text-[30px] font-semibold leading-tight tracking-normal text-slate-950 sm:text-[34px] lg:text-[30px]">
+        {firstName}，想聊点什么？
+      </h2>
+      <p className="mx-auto mt-4 max-w-[300px] text-sm leading-6 text-[var(--muted)] lg:max-w-md">
+        当前使用 {selectedKnowledgeBase.name}
+      </p>
+    </>
+  );
+
   return (
     <div
       className={cn(
@@ -3966,17 +3991,23 @@ function EmptyState({
         compact ? "mobile-empty-state--compact" : "",
       )}
     >
-      <div className="lg:rounded-[28px] lg:border lg:border-white/72 lg:bg-white/54 lg:px-8 lg:py-7 lg:shadow-[0_24px_80px_rgba(15,23,42,0.08)] lg:backdrop-blur-xl">
-        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-white/76 shadow-sm ring-1 ring-white/80 lg:mb-4 lg:h-12 lg:w-12 lg:border lg:border-[var(--accent-soft)] lg:bg-white/82 lg:text-[var(--accent-strong)]">
-          <Image src="/images/icon.png" alt="" width={56} height={56} className="h-14 w-14 object-cover lg:hidden" aria-hidden="true" />
-          <Sparkles size={21} className="hidden lg:block" aria-hidden="true" />
-        </div>
-        <h2 className="text-[30px] font-semibold leading-tight tracking-normal text-slate-950 sm:text-[34px] lg:text-[30px]">
-          {firstName}，想聊点什么？
-        </h2>
-        <p className="mx-auto mt-4 max-w-[300px] text-sm leading-6 text-[var(--muted)] lg:max-w-md">
-          当前使用 {selectedKnowledgeBase.name}
-        </p>
+      <div className="lg:hidden">{content}</div>
+      <div className="hidden lg:block">
+        <BorderGlow
+          className="max-w-[min(100%,560px)] backdrop-blur-xl"
+          edgeSensitivity={24}
+          glowColor="174 46 48"
+          backgroundColor="rgba(255,255,255,0.58)"
+          borderRadius={28}
+          glowRadius={28}
+          glowIntensity={0.78}
+          coneSpread={22}
+          animated
+          colors={WELCOME_GLOW_COLORS}
+          fillOpacity={0.14}
+        >
+          <div className="px-8 py-7">{content}</div>
+        </BorderGlow>
       </div>
     </div>
   );
@@ -4407,49 +4438,73 @@ function Composer({
   input,
   status,
   knowledgeReady,
+  isMobileLayout,
   onInput,
   onSubmit,
 }: {
   input: string;
   status: "idle" | "streaming" | "error";
   knowledgeReady: boolean;
+  isMobileLayout: boolean;
   onInput: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
 }) {
   const sendDisabled = status === "streaming" || !knowledgeReady;
+  const composerContent = (
+    <div className="flex min-h-[52px] min-w-0 items-end gap-2 lg:block lg:min-h-0">
+      <span className="mb-1.5 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.16)] ring-1 ring-white/90 lg:hidden">
+        <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 object-cover" aria-hidden="true" />
+      </span>
+      <textarea
+        value={input}
+        onChange={(event) => onInput(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            if (!knowledgeReady) {
+              return;
+            }
+            event.currentTarget.form?.requestSubmit();
+          }
+        }}
+        placeholder={knowledgeReady ? "问问 Maverella" : "知识库加载中"}
+        className="chat-composer-input min-h-[48px] min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
+        rows={1}
+        maxLength={2000}
+      />
+      <Button type="submit" variant="primary" size="icon" className="mb-1 h-10 w-10 shrink-0 rounded-full bg-[#006c63] text-white shadow-[0_10px_24px_rgba(0,108,99,0.22)] hover:bg-[#005a53] lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={sendDisabled} title={knowledgeReady ? "发送" : "知识库加载中"} aria-label="发送">
+        {status === "streaming" ? (
+          <Loader2 className="animate-spin" size={16} aria-hidden="true" />
+        ) : (
+          <Send size={16} aria-hidden="true" />
+        )}
+      </Button>
+    </div>
+  );
+
   return (
     <form onSubmit={onSubmit} className="mobile-composer pointer-events-none relative z-20 min-w-0 shrink-0 overflow-x-hidden px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] lg:static lg:pointer-events-auto lg:px-4 lg:pb-4">
-      <div className="mobile-composer-card pointer-events-auto mx-auto w-full max-w-3xl min-w-0 overflow-hidden rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)] lg:rounded-[26px] lg:p-3">
-        <div className="flex min-h-[52px] min-w-0 items-end gap-2 lg:block lg:min-h-0">
-          <span className="mb-1.5 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.16)] ring-1 ring-white/90 lg:hidden">
-            <Image src="/images/icon.png" alt="" width={40} height={40} className="h-10 w-10 object-cover" aria-hidden="true" />
-          </span>
-          <textarea
-            value={input}
-            onChange={(event) => onInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                if (!knowledgeReady) {
-                  return;
-                }
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder={knowledgeReady ? "问问 Maverella" : "知识库加载中"}
-            className="chat-composer-input min-h-[48px] min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-3 text-[16px] leading-6 text-[var(--foreground)] outline-none placeholder:text-slate-400 lg:min-h-16 lg:w-full lg:px-3 lg:py-2 lg:text-base"
-            rows={1}
-            maxLength={2000}
-          />
-          <Button type="submit" variant="primary" size="icon" className="mb-1 h-10 w-10 shrink-0 rounded-full bg-[#006c63] text-white shadow-[0_10px_24px_rgba(0,108,99,0.22)] hover:bg-[#005a53] lg:bg-[linear-gradient(180deg,#08786e_0%,var(--accent-strong)_100%)]" disabled={sendDisabled} title={knowledgeReady ? "发送" : "知识库加载中"} aria-label="发送">
-            {status === "streaming" ? (
-              <Loader2 className="animate-spin" size={16} aria-hidden="true" />
-            ) : (
-              <Send size={16} aria-hidden="true" />
-            )}
-          </Button>
+      {isMobileLayout ? (
+        <div className="mobile-composer-card pointer-events-auto mx-auto w-full max-w-3xl min-w-0 overflow-hidden rounded-[28px] border border-white/86 bg-white/90 p-1.5 shadow-[0_18px_60px_rgba(15,23,42,0.13)] backdrop-blur-2xl transition focus-within:border-white focus-within:bg-white/96 focus-within:shadow-[0_22px_70px_rgba(15,23,42,0.16)]">
+          {composerContent}
         </div>
-      </div>
+      ) : (
+        <BorderGlow
+          className="pointer-events-auto mx-auto w-full max-w-3xl min-w-0 backdrop-blur-2xl"
+          edgeSensitivity={22}
+          glowColor="174 48 48"
+          backgroundColor="rgba(255,255,255,0.78)"
+          borderRadius={26}
+          glowRadius={24}
+          glowIntensity={0.74}
+          coneSpread={22}
+          animated={false}
+          colors={COMPOSER_GLOW_COLORS}
+          fillOpacity={0.1}
+        >
+          <div className="p-3">{composerContent}</div>
+        </BorderGlow>
+      )}
       <p className="mx-auto mt-2 hidden max-w-3xl px-2 text-center text-[11px] leading-4 text-[#8a8a8a] lg:block">
         遇到无法解决的问题，请联系管理员：
         <a className="font-normal text-[#8a8a8a] hover:underline" href={`mailto:${ADMIN_CONTACT_EMAIL}`}>
